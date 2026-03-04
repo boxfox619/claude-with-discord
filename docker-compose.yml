@@ -8,8 +8,8 @@ services:
     volumes:
       # Config (read-only, hot-reload supported)
       - ./config.json:/app/config.json:ro
-      # Claude Code auth persistence (/root/.claude dir + /root/.claude.json file)
-      - claude-auth:/root/.claude
+      # Home directory persistence (auth, git config, ssh keys, etc.)
+      - user-home:/root
       - ./claude-config.json:/root/.claude.json
       # Project directories
       - ./:/app/projects/claude-with-discord
@@ -27,4 +27,4 @@ services:
         max-file: "3"
 
 volumes:
-  claude-auth:
+  user-home:
