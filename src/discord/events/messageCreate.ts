@@ -121,8 +121,20 @@ export function handleMessageCreate(_config: AppConfig, sessionManager: SessionM
     // Get fresh config for hot-reload support
     const config = getConfig();
 
-    // Only handle threads in mapped channels
-    const projectPath = config.channel_project_map[parentId];
+    // Check if this is a subsession thread (thread name starts with "[Sub:")
+    const isSubsessionThread = thread.name.startsWith("[Sub:");
+
+    // Get project path - either from channel map or from existing session (for subsessions)
+    let projectPath = config.channel_project_map[parentId];
+
+    // For subsession threads, get project path from the existing session
+    if (!projectPath && isSubsessionThread) {
+      const existingSession = sessionManager.getSession(thread.id);
+      if (existingSession) {
+        projectPath = existingSession.projectPath;
+      }
+    }
+
     if (!projectPath) return;
 
     // Check user whitelist

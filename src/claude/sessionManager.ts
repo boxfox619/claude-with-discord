@@ -2,8 +2,25 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { execSync } from "node:child_process";
 import type { PermissionResult, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { AttachmentBuilder, type Client, type ThreadChannel } from "discord.js";
-import type { AppConfig, SessionInfo, SessionMode, PendingPermission, ImageContent, PendingImage, QueuedMessage, AudioTranscription } from "../types.js";
+import type {
+  AppConfig,
+  SessionInfo,
+  MainSessionInfo,
+  SubsessionSessionInfo,
+  SessionMode,
+  PendingPermission,
+  ImageContent,
+  PendingImage,
+  QueuedMessage,
+  AudioTranscription,
+  SubsessionState,
+  SubsessionContext,
+} from "../types.js";
+import { isSubsession, isMainSession, SUBSESSION_LIMITS } from "../types.js";
 import { getConfig } from "../config.js";
+import { interSessionBus } from "./interSessionBus.js";
+import { initThreadCreationQueue } from "../discord/threadCreationQueue.js";
+import { initMcpServerConfig, createMcpServerForSession } from "../mcp/subsessionMcpServer.js";
 import { formatAssistantMessage, formatResultMessage, generateThreadTitle } from "./messageFormatter.js";
 import { splitMessage, truncateMessage } from "../discord/utils/messageSplitter.js";
 import { createEndSessionButton } from "../discord/components/endSessionButton.js";
@@ -39,6 +56,29 @@ export class SessionManager {
 
   setClient(client: Client): void {
     this.client = client;
+
+    // Initialize thread creation queue
+    initThreadCreationQueue(client);
+
+    // Initialize MCP server config
+    initMcpServerConfig({
+      discordClient: client,
+      getSession: (threadId: string) => this.sessions.get(threadId),
+      onSubsessionCreated: this.handleSubsessionCreated.bind(this),
+      onSubsessionClosed: this.handleSubsessionClosed.bind(this),
+    });
+
+    // Set up Discord message callback for InterSessionBus
+    interSessionBus.setDiscordMessageCallback(async (threadId, content) => {
+      try {
+        const channel = await client.channels.fetch(threadId);
+        if (channel && 'send' in channel) {
+          await (channel as ThreadChannel).send(content);
+        }
+      } catch (err) {
+        console.error(`[InterSessionBus] Failed to send message to thread ${threadId}:`, err);
+      }
+    });
   }
 
   getSession(threadId: string): SessionInfo | undefined {
@@ -341,6 +381,15 @@ export class SessionManager {
         });
       };
 
+      // Build MCP servers config if session exists (for subsession tools)
+      const mcpServersConfig = session ? {
+        subsession: {
+          type: 'sdk' as const,
+          name: 'subsession',
+          instance: createMcpServerForSession(session),
+        },
+      } : undefined;
+
       const response = query({
         prompt: finalPrompt,
         options: {
@@ -352,7 +401,8 @@ export class SessionManager {
           maxBudgetUsd: this.config.max_budget_usd,
           abortController,
           canUseTool,
-                    ...(session?.sessionId ? { resume: session.sessionId } : {}),
+          ...(mcpServersConfig ? { mcpServers: mcpServersConfig } : {}),
+          ...(session?.sessionId ? { resume: session.sessionId } : {}),
         },
       });
 
@@ -367,7 +417,8 @@ export class SessionManager {
         for await (const message of response) {
           if (message.type === "system" && message.subtype === "init") {
             // First message: capture session ID
-            const sessionInfo: SessionInfo = {
+            // Create as MainSessionInfo (default for new sessions)
+            const sessionInfo: MainSessionInfo = {
               sessionId: message.session_id,
               threadId,
               channelId,
@@ -380,9 +431,24 @@ export class SessionManager {
               mode: "action",
               pendingImages: pendingImages.length > 0 ? pendingImages : undefined,
               messageQueue: [],
+              // Main session specific fields
+              isSubsession: false,
+              childSubsessions: new Map(),
+              nextSubsessionId: 1,
             };
             this.sessions.set(threadId, sessionInfo);
             session = sessionInfo;
+
+            // Add MCP server for subsession tools after session is created
+            response.setMcpServers({
+              subsession: {
+                type: 'sdk',
+                name: 'subsession',
+                instance: createMcpServerForSession(sessionInfo),
+              },
+            }).catch((err) => {
+              console.error(`Failed to set MCP servers for thread ${threadId}:`, err);
+            });
 
             // Rename thread based on user's first message
             const title = generateThreadTitle(userMessage);
@@ -902,5 +968,196 @@ export class SessionManager {
       session.abortController.abort();
     }
     this.sessions.clear();
+  }
+
+  // ============================================
+  // Subsession Management
+  // ============================================
+
+  /**
+   * Build subsession system prompt
+   */
+  private buildSubsessionSystemPrompt(
+    id: number,
+    alias: string,
+    description: string,
+    parentThreadId: string,
+    context?: SubsessionContext
+  ): string {
+    let prompt = `## 역할
+${description}
+
+## 세션 정보
+- ID: ${id}
+- Alias: ${alias}
+- 부모 스레드: ${parentThreadId}
+`;
+
+    if (context) {
+      prompt += `\n## 컨텍스트\n`;
+      if (context.background) {
+        prompt += `### 배경\n${context.background}\n`;
+      }
+      if (context.relevant_files?.length) {
+        prompt += `### 관련 파일\n${context.relevant_files.map(f => `- ${f}`).join('\n')}\n`;
+      }
+      if (context.constraints?.length) {
+        prompt += `### 제약 조건\n${context.constraints.map(c => `- ${c}`).join('\n')}\n`;
+      }
+    }
+
+    prompt += `
+## 중요: 코드 변경 규칙
+
+당신은 코드를 직접 수정할 수 있지만, 다음 규칙을 따르세요:
+
+1. **분석/조사**: 자유롭게 수행
+2. **코드 변경 전**: 반드시 메인에 승인 요청
+   - ask_parent(type: "approval_request", message: "변경 계획...")
+   - 승인 받은 후 진행
+3. **메인이 명확히 지시한 경우**: 바로 수행 가능
+   - 예: "src/auth.ts의 validateToken 함수 수정해"
+
+## 사용 가능한 도구
+- notify_parent: 부모에게 단방향 알림 (정보 전달, 경고)
+- ask_parent: 부모에게 질문/승인 요청 (응답 대기)
+- update_progress: 진행 상황 업데이트
+- list_subsessions: 형제 세션 목록 확인 (읽기 전용)
+
+> **Note**: 형제 세션 간 직접 통신은 지원하지 않습니다. 조율이 필요한 경우 메인 세션을 통해 처리합니다.
+
+## 작업 완료
+작업이 끝나면 결과가 자동으로 부모 세션에 전달됩니다.
+`;
+
+    return prompt;
+  }
+
+  /**
+   * Handle subsession creation callback
+   */
+  private async handleSubsessionCreated(
+    state: SubsessionState,
+    description: string,
+    context?: SubsessionContext
+  ): Promise<void> {
+    if (!this.client) {
+      throw new Error('Discord client not initialized');
+    }
+
+    // Find parent session
+    let parentSession: MainSessionInfo | undefined;
+    for (const session of this.sessions.values()) {
+      if (isMainSession(session)) {
+        // Check if this is the parent (by checking childSubsessions later)
+        parentSession = session;
+        break;
+      }
+    }
+
+    if (!parentSession) {
+      throw new Error('Parent session not found');
+    }
+
+    // Register in parent's childSubsessions
+    parentSession.childSubsessions.set(state.id, state);
+
+    // Get the subsession thread
+    const thread = await this.client.channels.fetch(state.threadId) as ThreadChannel;
+    if (!thread) {
+      throw new Error('Subsession thread not found');
+    }
+
+    // Build system prompt for subsession
+    const systemPrompt = this.buildSubsessionSystemPrompt(
+      state.id,
+      state.alias,
+      description,
+      parentSession.threadId,
+      context
+    );
+
+    // Send initial message to subsession thread
+    await thread.send(`*서브세션 \`${state.alias}\` (ID: ${state.id}) 시작됨*\n\n${description}`);
+
+    // Create subsession SessionInfo
+    const subsessionInfo: SubsessionSessionInfo = {
+      sessionId: '', // Will be set on first message
+      threadId: state.threadId,
+      channelId: parentSession.channelId,
+      projectPath: parentSession.projectPath,
+      query: null,
+      abortController: new AbortController(),
+      totalCostUsd: 0,
+      lastActivityAt: Date.now(),
+      isProcessing: false,
+      mode: 'action',
+      messageQueue: [],
+      // Subsession specific fields
+      isSubsession: true,
+      subsessionId: state.id,
+      alias: state.alias,
+      parentThreadId: parentSession.threadId,
+    };
+
+    this.sessions.set(state.threadId, subsessionInfo);
+
+    // Register message handler for inter-session communication
+    interSessionBus.registerHandler(state.threadId, async (message) => {
+      if (message.type === 'task') {
+        // Received task from parent - send to subsession
+        await this.sendMessage(
+          state.threadId,
+          parentSession!.channelId,
+          parentSession!.projectPath,
+          message.content,
+          thread
+        );
+      }
+    });
+  }
+
+  /**
+   * Handle subsession closed callback
+   */
+  private async handleSubsessionClosed(threadId: string): Promise<void> {
+    const session = this.sessions.get(threadId);
+    if (!session) return;
+
+    // Abort the session
+    session.abortController.abort();
+
+    // If it's a subsession, remove from parent's childSubsessions
+    if (isSubsession(session)) {
+      const parentSession = this.sessions.get(session.parentThreadId);
+      if (parentSession && isMainSession(parentSession)) {
+        parentSession.childSubsessions.delete(session.subsessionId);
+      }
+    }
+
+    // Remove from sessions
+    this.sessions.delete(threadId);
+
+    // Cleanup InterSessionBus
+    interSessionBus.cleanup(threadId);
+  }
+
+  /**
+   * Check if a session is a subsession
+   */
+  isSessionSubsession(threadId: string): boolean {
+    const session = this.sessions.get(threadId);
+    return session ? isSubsession(session) : false;
+  }
+
+  /**
+   * Get parent thread ID for a subsession
+   */
+  getParentThreadId(threadId: string): string | undefined {
+    const session = this.sessions.get(threadId);
+    if (session && isSubsession(session)) {
+      return session.parentThreadId;
+    }
+    return undefined;
   }
 }
