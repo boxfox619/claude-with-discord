@@ -4,7 +4,6 @@ import type {
   PendingTask,
   PendingResponse,
   SubsessionState,
-  TaskResult,
 } from '../types.js';
 
 type MessageHandler = (message: InterSessionMessage) => void | Promise<void>;
@@ -66,6 +65,13 @@ class InterSessionBus {
    */
   unregisterHandler(threadId: string): void {
     this.messageHandlers.delete(threadId);
+  }
+
+  /**
+   * 핸들러 등록 여부 확인
+   */
+  hasHandler(threadId: string): boolean {
+    return this.messageHandlers.has(threadId);
   }
 
   /**
@@ -137,7 +143,7 @@ class InterSessionBus {
   // ============================================
 
   /**
-   * 메시지 전송 (내부)
+   * 메시지 전송 (내부, 블로킹)
    */
   private async send(message: InterSessionMessage): Promise<void> {
     const queue = this.messageQueues.get(message.to.threadId) || [];
@@ -148,6 +154,26 @@ class InterSessionBus {
     const handler = this.messageHandlers.get(message.to.threadId);
     if (handler) {
       await handler(message);
+    }
+  }
+
+  /**
+   * 메시지 전송 (내부, 논블로킹 - 핸들러를 기다리지 않음)
+   */
+  private sendNonBlocking(message: InterSessionMessage): void {
+    const queue = this.messageQueues.get(message.to.threadId) || [];
+    queue.push(message);
+    this.messageQueues.set(message.to.threadId, queue);
+
+    // 핸들러가 있으면 비동기로 실행 (기다리지 않음)
+    const handler = this.messageHandlers.get(message.to.threadId);
+    if (handler) {
+      const result = handler(message);
+      if (result instanceof Promise) {
+        result.catch((err: Error) => {
+          console.error(`[InterSessionBus] Handler error for ${message.to.threadId}:`, err);
+        });
+      }
     }
   }
 
@@ -249,85 +275,25 @@ class InterSessionBus {
       waitingForResponse: false,
     };
 
-    await this.send(message);
-
-    // Discord에 표시
+    // Discord에 먼저 표시 (작업 위임 알림을 즉시 보여줌)
     await this.displayInDiscord(parentThreadId, 'task_delegated', `[${subsession.alias}]에게: ${task.slice(0, 200)}`);
     await this.displayInDiscord(subsession.threadId, 'task_received', task);
+
+    // 메시지 전송 (논블로킹 - 핸들러 완료를 기다리지 않음, 병렬 처리 가능)
+    this.sendNonBlocking(message);
 
     return { success: true, taskId, message: '작업이 위임되었습니다.' };
   }
 
   /**
-   * 타임아웃 체크
+   * 타임아웃 체크 (진행 상황 메시지 비활성화됨)
+   *
+   * 참고: 진행 상황 체크 메시지는 사용자 혼란을 야기하여 비활성화됨.
+   * 에이전트가 완료되면 notify_parent를 통해 직접 결과를 전달함.
    */
-  private async checkTaskTimeout(taskId: string, parentThreadId: string): Promise<void> {
-    const task = this.pendingTasks.get(taskId);
-    if (!task) return;
-
-    const subsession = this.sessionStates.get(task.targetThreadId);
-    if (!subsession) return;
-
-    const progressMsg = subsession.progress || '작업 진행 중...';
-
-    await this.displayInDiscord(
-      parentThreadId,
-      'progress',
-      `[${subsession.alias}] ${Math.floor(task.checkAfterMs / 60000)}분 경과\n진행: "${progressMsg}"`
-    );
-  }
-
-  // ============================================
-  // 결과 전송 (서브 → 메인)
-  // ============================================
-
-  /**
-   * 서브세션 작업 완료 시 결과 전송
-   */
-  async onSubsessionComplete(
-    subsessionThreadId: string,
-    parentThreadId: string,
-    taskId: string,
-    result: TaskResult
-  ): Promise<void> {
-    // PendingTask 정리
-    const task = this.pendingTasks.get(taskId);
-    if (task?.timeoutId) {
-      clearTimeout(task.timeoutId);
-    }
-    this.pendingTasks.delete(taskId);
-
-    // 서브세션 상태 업데이트
-    const subsession = this.sessionStates.get(subsessionThreadId);
-    if (subsession) {
-      this.updateSubsessionState(subsessionThreadId, {
-        status: 'completed',
-        lastResult: result.result,
-      });
-    }
-
-    // 메시지 전송
-    const message: InterSessionMessage = {
-      id: randomUUID(),
-      timestamp: Date.now(),
-      from: { threadId: subsessionThreadId, alias: subsession?.alias, isMain: false },
-      to: { threadId: parentThreadId },
-      type: 'result',
-      content: result.result,
-      summary: result.summary.slice(0, 500),
-      taskId,
-      waitingForResponse: false,
-    };
-
-    await this.send(message);
-
-    // Discord에 표시
-    await this.displayInDiscord(subsessionThreadId, 'result_sent', '[메인]에게 결과 전송');
-    await this.displayInDiscord(
-      parentThreadId,
-      'result_received',
-      `[${subsession?.alias || 'subsession'}] 결과:\n${result.summary}`
-    );
+  private async checkTaskTimeout(_taskId: string, _parentThreadId: string): Promise<void> {
+    // 진행 상황 메시지 비활성화
+    // 에이전트는 notify_parent/ask_parent를 통해 직접 소통해야 함
   }
 
   // ============================================
@@ -362,7 +328,8 @@ class InterSessionBus {
     await this.displayInDiscord(
       parentThreadId,
       'notify',
-      `${icon} [${subsession?.alias || 'subsession'}]: ${messageContent}`
+      `${icon} ${messageContent}`,
+      subsession?.alias
     );
   }
 

@@ -10,8 +10,8 @@ import {
 import type { AppConfig, SessionMode } from "../../types.js";
 import { getConfig } from "../../config.js";
 import type { SessionManager } from "../../claude/sessionManager.js";
-import { createNewSessionButton } from "../components/newSessionButton.js";
-import { createModeButtons } from "../components/modeButtons.js";
+import { createSessionButtons } from "../components/closeAllSessionsButton.js";
+import { createModeSelect } from "../components/modeButtons.js";
 
 export function handleInteractionCreate(_config: AppConfig, sessionManager: SessionManager) {
   return async (interaction: Interaction) => {
@@ -53,6 +53,20 @@ export function handleInteractionCreate(_config: AppConfig, sessionManager: Sess
     // Handle select menu interactions
     if (interaction.isStringSelectMenu()) {
       const customId = interaction.customId;
+
+      // Handle mode select
+      if (customId === "mode_select") {
+        const channel = interaction.channel;
+        if (!channel || (channel.type !== ChannelType.PublicThread && channel.type !== ChannelType.PrivateThread)) {
+          return;
+        }
+
+        const mode = interaction.values[0] as SessionMode;
+        await interaction.deferUpdate();
+        await sessionManager.setMode(channel.id, mode, channel);
+        return;
+      }
+
       if (customId.startsWith("question_select:")) {
         const parts = customId.split(":");
         const toolUseId = parts[1];
@@ -156,15 +170,58 @@ export function handleInteractionCreate(_config: AppConfig, sessionManager: Sess
         // Message might already be deleted
       }
 
+      const sessionCount = sessionManager.getSessionCountByChannel(parentChannel.id);
       await parentChannel.send({
         content: "**Claude Code Session**",
-        components: [createNewSessionButton()],
+        components: [createSessionButtons(sessionCount)],
       });
 
-      // Send initial message in thread with mode buttons
+      // Send initial message in thread with mode select
       await thread.send({
         content: "*Session ready. Send a message to start.*",
-        components: [createModeButtons("action")],
+        components: [createModeSelect("action")],
+      });
+
+      return;
+    }
+
+    // Handle close all sessions button
+    if (customId === "close_all_sessions") {
+      const parentChannel = interaction.channel;
+      if (!parentChannel || parentChannel.type !== ChannelType.GuildText) {
+        await interaction.reply({
+          content: "*This button can only be used in a text channel.*",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      // Check if there are any sessions to close
+      const sessionCount = sessionManager.getSessionCountByChannel(parentChannel.id);
+      if (sessionCount === 0) {
+        await interaction.reply({
+          content: "*No active sessions to close.*",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      await interaction.deferUpdate();
+
+      // Close all sessions for this channel
+      const closedCount = await sessionManager.closeAllSessionsByChannel(parentChannel.id);
+
+      // Delete the old button message and send a new one
+      try {
+        await interaction.message?.delete();
+      } catch {
+        // Message might already be deleted
+      }
+
+      const newSessionCount = sessionManager.getSessionCountByChannel(parentChannel.id);
+      await parentChannel.send({
+        content: `**Claude Code Session**\n\n*Closed ${closedCount} session(s).*`,
+        components: [createSessionButtons(newSessionCount)],
       });
 
       return;

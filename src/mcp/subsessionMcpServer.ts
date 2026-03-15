@@ -1,8 +1,11 @@
 /**
- * Subsession MCP Server (In-Memory)
+ * Stateful Agent MCP Server (In-Memory)
  *
  * Claude Agent SDK의 mcpServers 옵션에 직접 전달되는 인메모리 MCP 서버입니다.
  * 별도 프로세스 없이 같은 프로세스에서 실행되어 메모리를 공유합니다.
+ *
+ * "Stateful Agent"는 컨텍스트를 유지하는 독립 에이전트입니다.
+ * (기존 "subsession" 용어를 대체)
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -21,7 +24,7 @@ import { SUBSESSION_LIMITS, ALIAS_RULES } from '../types.js';
 interface SubsessionMcpServerConfig {
   discordClient: Client;
   getSession: (threadId: string) => SessionInfo | undefined;
-  onSubsessionCreated: (state: SubsessionState, description: string, context?: SubsessionContext) => Promise<void>;
+  onSubsessionCreated: (state: SubsessionState, description: string, parentThreadId: string, context?: SubsessionContext) => Promise<void>;
   onSubsessionClosed: (threadId: string) => Promise<void>;
 }
 
@@ -43,7 +46,7 @@ export function createMainSessionMcpServer(
   context: ExecutionContext
 ): McpServer {
   const server = new McpServer({
-    name: 'subsession-main',
+    name: 'stateful-agent-main',
     version: '1.0.0',
   });
 
@@ -53,14 +56,14 @@ export function createMainSessionMcpServer(
   }
 
   // ----------------------------------------
-  // create_subsession
+  // create_stateful_agent
   // ----------------------------------------
   server.tool(
-    'create_subsession',
-    '서브세션을 생성합니다. 서브세션은 독립된 Discord 스레드에서 실행되며, 컨텍스트를 유지합니다.',
+    'create_stateful_agent',
+    'Stateful Agent를 생성합니다. 독립된 Discord 스레드에서 실행되며, 컨텍스트를 유지하는 에이전트입니다.',
     {
-      alias: z.string().describe('서브세션 식별자 (고유, 영문 소문자/숫자/하이픈)'),
-      description: z.string().describe('서브세션의 역할과 지침'),
+      alias: z.string().describe('에이전트 식별자 (고유, 영문 소문자/숫자/하이픈)'),
+      description: z.string().describe('에이전트의 역할과 지침'),
       context: z.object({
         relevant_files: z.array(z.string()).optional().describe('관련 파일 경로 목록'),
         background: z.string().optional().describe('배경 정보'),
@@ -98,13 +101,13 @@ export function createMainSessionMcpServer(
         };
       }
 
-      // 서브세션 수 제한 확인
+      // 에이전트 수 제한 확인
       const allSubsessions = interSessionBus.getAllSubsessions();
       if (allSubsessions.length >= SUBSESSION_LIMITS.MAX_TOTAL_SUBSESSIONS) {
         return {
           content: [{ type: 'text', text: JSON.stringify({
             success: false,
-            error: '전체 서브세션 수가 최대치에 도달했습니다.',
+            error: '전체 Stateful Agent 수가 최대치에 도달했습니다.',
           }) }],
         };
       }
@@ -112,14 +115,14 @@ export function createMainSessionMcpServer(
       try {
         // Discord 스레드 생성
         const threadQueue = getThreadCreationQueue();
-        const threadName = `[Sub:${alias}] Session`.slice(0, 100);
+        const threadName = `[Agent:${alias}]`.slice(0, 100);
 
         const thread = await threadQueue.createThread(session.channelId, threadName, {
           autoArchiveDuration: 1440,
-          reason: `Subsession created: ${alias}`,
+          reason: `Stateful Agent created: ${alias}`,
         });
 
-        // 서브세션 ID 발급
+        // 에이전트 ID 발급
         const subsessionId = session.nextSubsessionId++;
 
         // SubsessionState 생성
@@ -136,8 +139,8 @@ export function createMainSessionMcpServer(
         // InterSessionBus에 등록
         interSessionBus.registerSubsession(state);
 
-        // 콜백 호출
-        await config.onSubsessionCreated(state, description, subsessionContext);
+        // 콜백 호출 (부모 threadId 전달)
+        await config.onSubsessionCreated(state, description, session.threadId, subsessionContext);
 
         return {
           content: [{ type: 'text', text: JSON.stringify({
@@ -145,14 +148,14 @@ export function createMainSessionMcpServer(
             id: subsessionId,
             alias,
             threadId: thread.id,
-            message: `서브세션 '${alias}' (ID: ${subsessionId})가 생성되었습니다.`,
+            message: `Stateful Agent '${alias}' (ID: ${subsessionId})가 생성되었습니다.`,
           }) }],
         };
       } catch (error) {
         return {
           content: [{ type: 'text', text: JSON.stringify({
             success: false,
-            error: `서브세션 생성 실패: ${(error as Error).message}`,
+            error: `Stateful Agent 생성 실패: ${(error as Error).message}`,
           }) }],
         };
       }
@@ -160,14 +163,18 @@ export function createMainSessionMcpServer(
   );
 
   // ----------------------------------------
-  // delegate_to_subsession
+  // delegate_task
   // ----------------------------------------
   server.tool(
-    'delegate_to_subsession',
-    '서브세션에 작업을 위임합니다. 결과는 완료 시 자동으로 전달됩니다. 이 도구는 즉시 반환되며, 서브세션의 작업 완료를 기다리지 않습니다.',
+    'delegate_task',
+    `Stateful Agent에 작업을 위임합니다.
+
+**중요**: 이 도구는 즉시 반환됩니다. 작업 위임 후 다른 작업을 계속 진행하세요.
+에이전트가 완료되면 "[에이전트 메시지: alias]" 형식의 새 메시지가 자동으로 도착합니다.
+check_agent_status로 폴링하지 마세요.`,
     {
-      targetId: z.number().optional().describe('대상 서브세션의 숫자 ID'),
-      targetAlias: z.string().optional().describe('대상 서브세션의 alias'),
+      targetId: z.number().optional().describe('대상 에이전트의 숫자 ID'),
+      targetAlias: z.string().optional().describe('대상 에이전트의 alias'),
       task: z.string().describe('위임할 작업'),
       check_after_ms: z.number().optional().describe('상태 체크 타임아웃 (기본 2분)'),
     },
@@ -197,14 +204,17 @@ export function createMainSessionMcpServer(
   );
 
   // ----------------------------------------
-  // check_subsession_status
+  // check_agent_status
   // ----------------------------------------
   server.tool(
-    'check_subsession_status',
-    '서브세션의 현재 상태를 확인합니다.',
+    'check_agent_status',
+    `Stateful Agent의 현재 상태를 확인합니다.
+
+**주의**: 에이전트 결과를 기다리기 위해 이 도구를 반복 호출(폴링)하지 마세요.
+에이전트가 완료되면 자동으로 메시지가 전달됩니다. 이 도구는 디버깅이나 특수한 상황에서만 사용하세요.`,
     {
-      id: z.number().optional().describe('서브세션의 숫자 ID'),
-      alias: z.string().optional().describe('서브세션의 alias'),
+      id: z.number().optional().describe('에이전트의 숫자 ID'),
+      alias: z.string().optional().describe('에이전트의 alias'),
     },
     async (args) => {
       const { id, alias } = args;
@@ -220,7 +230,7 @@ export function createMainSessionMcpServer(
         return {
           content: [{ type: 'text', text: JSON.stringify({
             success: false,
-            error: '서브세션을 찾을 수 없습니다.',
+            error: 'Stateful Agent를 찾을 수 없습니다.',
           }) }],
         };
       }
@@ -240,14 +250,14 @@ export function createMainSessionMcpServer(
   );
 
   // ----------------------------------------
-  // close_subsession
+  // close_agent
   // ----------------------------------------
   server.tool(
-    'close_subsession',
-    '서브세션을 종료합니다.',
+    'close_agent',
+    'Stateful Agent를 종료합니다.',
     {
-      id: z.number().optional().describe('서브세션의 숫자 ID'),
-      alias: z.string().optional().describe('서브세션의 alias'),
+      id: z.number().optional().describe('에이전트의 숫자 ID'),
+      alias: z.string().optional().describe('에이전트의 alias'),
       archive_thread: z.boolean().optional().describe('Discord 스레드 아카이브 여부 (기본: true)'),
     },
     async (args) => {
@@ -264,7 +274,7 @@ export function createMainSessionMcpServer(
         return {
           content: [{ type: 'text', text: JSON.stringify({
             success: false,
-            message: '서브세션을 찾을 수 없습니다.',
+            message: 'Stateful Agent를 찾을 수 없습니다.',
           }) }],
         };
       }
@@ -274,10 +284,10 @@ export function createMainSessionMcpServer(
           try {
             const thread = await config.discordClient.channels.fetch(subsession.threadId);
             if (thread && 'setArchived' in thread) {
-              await (thread as any).setArchived(true, '서브세션 종료');
+              await (thread as any).setArchived(true, 'Stateful Agent 종료');
             }
           } catch (err) {
-            console.warn(`[close_subsession] Failed to archive thread: ${err}`);
+            console.warn(`[close_agent] Failed to archive thread: ${err}`);
           }
         }
 
@@ -287,14 +297,14 @@ export function createMainSessionMcpServer(
         return {
           content: [{ type: 'text', text: JSON.stringify({
             success: true,
-            message: `서브세션 '${subsession.alias}' (ID: ${subsession.id})가 종료되었습니다.`,
+            message: `Stateful Agent '${subsession.alias}' (ID: ${subsession.id})가 종료되었습니다.`,
           }) }],
         };
       } catch (error) {
         return {
           content: [{ type: 'text', text: JSON.stringify({
             success: false,
-            message: `서브세션 종료 실패: ${(error as Error).message}`,
+            message: `Stateful Agent 종료 실패: ${(error as Error).message}`,
           }) }],
         };
       }
@@ -302,11 +312,11 @@ export function createMainSessionMcpServer(
   );
 
   // ----------------------------------------
-  // respond_to_subsession
+  // respond_to_agent
   // ----------------------------------------
   server.tool(
-    'respond_to_subsession',
-    '서브세션의 ask_parent 요청에 응답합니다.',
+    'respond_to_agent',
+    'Stateful Agent의 ask_parent 요청에 응답합니다.',
     {
       requestId: z.string().describe('요청 ID'),
       approved: z.boolean().optional().describe('승인 여부 (approval_request인 경우)'),
@@ -324,16 +334,16 @@ export function createMainSessionMcpServer(
   );
 
   // ----------------------------------------
-  // list_subsessions (공통)
+  // list_agents (공통)
   // ----------------------------------------
   server.tool(
-    'list_subsessions',
-    '현재 활성화된 모든 서브세션 목록과 상태를 확인합니다.',
+    'list_agents',
+    '현재 활성화된 모든 Stateful Agent 목록과 상태를 확인합니다.',
     {},
     async () => {
       const allSubsessions = interSessionBus.getAllSubsessions();
 
-      const subsessions = allSubsessions.map((s) => ({
+      const agents = allSubsessions.map((s) => ({
         id: s.id,
         alias: s.alias,
         status: s.status,
@@ -345,7 +355,7 @@ export function createMainSessionMcpServer(
       return {
         content: [{ type: 'text', text: JSON.stringify({
           success: true,
-          subsessions,
+          agents,
         }) }],
       };
     }
@@ -355,14 +365,14 @@ export function createMainSessionMcpServer(
 }
 
 /**
- * 서브세션용 MCP 서버 생성
+ * Stateful Agent용 MCP 서버 생성 (child)
  */
 export function createSubsessionMcpServer(
   _config: SubsessionMcpServerConfig,
   context: ExecutionContext
 ): McpServer {
   const server = new McpServer({
-    name: 'subsession-child',
+    name: 'stateful-agent-child',
     version: '1.0.0',
   });
 
@@ -485,16 +495,16 @@ export function createSubsessionMcpServer(
   );
 
   // ----------------------------------------
-  // list_subsessions (공통)
+  // list_agents (공통)
   // ----------------------------------------
   server.tool(
-    'list_subsessions',
-    '현재 활성화된 모든 서브세션 목록과 상태를 확인합니다. (읽기 전용)',
+    'list_agents',
+    '현재 활성화된 모든 Stateful Agent 목록과 상태를 확인합니다. (읽기 전용)',
     {},
     async () => {
       const allSubsessions = interSessionBus.getAllSubsessions();
 
-      const subsessions = allSubsessions.map((s) => ({
+      const agents = allSubsessions.map((s) => ({
         id: s.id,
         alias: s.alias,
         status: s.status,
@@ -506,7 +516,7 @@ export function createSubsessionMcpServer(
       return {
         content: [{ type: 'text', text: JSON.stringify({
           success: true,
-          subsessions,
+          agents,
         }) }],
       };
     }

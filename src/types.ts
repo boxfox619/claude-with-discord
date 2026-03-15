@@ -110,6 +110,7 @@ export interface SubsessionSessionInfo extends BaseSessionInfo {
   parentThreadId: string;
   lastResult?: string;
   progress?: string;
+  subsessionSystemPrompt?: string;  // 서브세션 전용 시스템 프롬프트
 }
 
 // 유니온 타입
@@ -192,18 +193,6 @@ export interface PendingResponse {
   requestedAt: number;
   timeoutMs: number;
   resolve: (response: { approved?: boolean; response: string; timeout: boolean }) => void;
-}
-
-export interface TaskResult {
-  result: string;
-  summary: string;
-  attachments?: TaskAttachment[];
-}
-
-export interface TaskAttachment {
-  filename: string;
-  content: string;
-  type: 'text' | 'json' | 'markdown';
 }
 
 // ============================================

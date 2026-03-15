@@ -28,11 +28,11 @@ export function createDiscordClient(_config?: AppConfig): { client: Client; sess
 
     // Send "New Session" button to each mapped channel
     for (const channelId of Object.keys(config.channel_project_map)) {
-      await sendButtonToChannelWithUsage(client, channelId);
+      await sendButtonToChannelWithUsage(client, channelId, sessionManager);
     }
 
     // Start usage updater for the special channel
-    startUsageUpdater(client);
+    startUsageUpdater(client, sessionManager);
 
     // Start thread cleaner to auto-delete threads older than 7 days
     startThreadCleaner(client);
@@ -45,7 +45,7 @@ export function createDiscordClient(_config?: AppConfig): { client: Client; sess
       for (const channelId of newChannels) {
         if (!oldChannels.has(channelId)) {
           console.log(`New channel detected: ${channelId}`);
-          await sendButtonToChannelWithUsage(client, channelId);
+          await sendButtonToChannelWithUsage(client, channelId, sessionManager);
         }
       }
     });
