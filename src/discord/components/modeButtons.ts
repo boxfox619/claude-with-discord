@@ -1,26 +1,46 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
+import { ActionRowBuilder, StringSelectMenuBuilder } from "discord.js";
 
 export type SessionMode = "action" | "plan" | "ask";
 
-export function createModeButtons(currentMode: SessionMode) {
-  const planButton = new ButtonBuilder()
-    .setCustomId("mode_plan")
-    .setLabel("Plan")
-    .setStyle(currentMode === "plan" ? ButtonStyle.Primary : ButtonStyle.Secondary);
+export function createModeSelect(currentMode: SessionMode) {
+  const select = new StringSelectMenuBuilder()
+    .setCustomId("mode_select")
+    .setPlaceholder(`Mode: ${getModeLabel(currentMode)}`)
+    .addOptions([
+      {
+        label: "Plan",
+        description: "Analyze and create a plan without making changes",
+        value: "plan",
+        default: currentMode === "plan",
+      },
+      {
+        label: "Ask",
+        description: "Answer questions without making changes",
+        value: "ask",
+        default: currentMode === "ask",
+      },
+      {
+        label: "Action",
+        description: "Execute tasks and make changes",
+        value: "action",
+        default: currentMode === "action",
+      },
+    ]);
 
-  const askButton = new ButtonBuilder()
-    .setCustomId("mode_ask")
-    .setLabel("Ask")
-    .setStyle(currentMode === "ask" ? ButtonStyle.Primary : ButtonStyle.Secondary);
-
-  const actionButton = new ButtonBuilder()
-    .setCustomId("mode_action")
-    .setLabel("Action")
-    .setStyle(currentMode === "action" ? ButtonStyle.Primary : ButtonStyle.Secondary);
-
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(planButton, askButton, actionButton);
+  const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
 
   return row;
+}
+
+function getModeLabel(mode: SessionMode): string {
+  switch (mode) {
+    case "plan":
+      return "Plan";
+    case "ask":
+      return "Ask";
+    case "action":
+      return "Action";
+  }
 }
 
 export function getModeDescription(mode: SessionMode): string {

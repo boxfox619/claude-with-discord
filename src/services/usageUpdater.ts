@@ -1,6 +1,7 @@
 import type { Client, Message, TextChannel } from "discord.js";
 import { fetchUsageInfo, formatUsageEmbed } from "./usageService.js";
-import { createNewSessionButton } from "../discord/components/newSessionButton.js";
+import { createSessionButtons } from "../discord/components/closeAllSessionsButton.js";
+import type { SessionManager } from "../claude/sessionManager.js";
 
 // Channel ID for claude-with-discord project
 const CLAUDE_CODE_CHANNEL_ID = "1472468552916275342";
@@ -8,11 +9,16 @@ const UPDATE_INTERVAL_MS = 60_000; // 1 minute
 
 let updateInterval: ReturnType<typeof setInterval> | null = null;
 let trackedMessageId: string | null = null;
+let sessionManagerRef: SessionManager | null = null;
 
 /**
  * Start the usage updater for the special channel
  */
-export function startUsageUpdater(client: Client): void {
+export function startUsageUpdater(client: Client, sessionManager?: SessionManager): void {
+  if (sessionManager) {
+    sessionManagerRef = sessionManager;
+  }
+
   if (updateInterval) {
     clearInterval(updateInterval);
   }
@@ -55,9 +61,10 @@ async function updateUsageMessage(client: Client): Promise<void> {
     if (!usage) return;
 
     const content = formatSessionMessageWithUsage(usage);
+    const sessionCount = sessionManagerRef?.getSessionCountByChannel(CLAUDE_CODE_CHANNEL_ID) ?? 0;
     await message.edit({
       content,
-      components: [createNewSessionButton()],
+      components: [createSessionButtons(sessionCount)],
     });
   } catch (err) {
     console.error("Failed to update usage message:", err);
@@ -82,8 +89,13 @@ function formatSessionMessageWithUsage(usage: ReturnType<typeof fetchUsageInfo> 
  */
 export async function sendButtonToChannelWithUsage(
   client: Client,
-  channelId: string
+  channelId: string,
+  sessionManager?: SessionManager
 ): Promise<void> {
+  if (sessionManager) {
+    sessionManagerRef = sessionManager;
+  }
+
   try {
     const channel = await client.channels.fetch(channelId);
     if (!channel || !("send" in channel) || !("messages" in channel)) return;
@@ -99,6 +111,8 @@ export async function sendButtonToChannelWithUsage(
       await msg.delete().catch(() => {});
     }
 
+    const sessionCount = sessionManagerRef?.getSessionCountByChannel(channelId) ?? 0;
+
     // Check if this is the special channel
     if (channelId === CLAUDE_CODE_CHANNEL_ID) {
       const usage = await fetchUsageInfo();
@@ -108,7 +122,7 @@ export async function sendButtonToChannelWithUsage(
 
       const sentMessage = await textChannel.send({
         content,
-        components: [createNewSessionButton()],
+        components: [createSessionButtons(sessionCount)],
       });
 
       // Track this message for updates
@@ -118,7 +132,7 @@ export async function sendButtonToChannelWithUsage(
       // Regular channel - just send button
       await textChannel.send({
         content: "**Claude Code Session**",
-        components: [createNewSessionButton()],
+        components: [createSessionButtons(sessionCount)],
       });
       console.log(`Sent new session button to channel ${channelId}`);
     }
