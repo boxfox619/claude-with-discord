@@ -7,6 +7,7 @@ import { handleMessageCreate } from "./events/messageCreate.js";
 import { handleInteractionCreate } from "./events/interactionCreate.js";
 import { sendButtonToChannelWithUsage, startUsageUpdater } from "../services/usageUpdater.js";
 import { startThreadCleaner } from "../services/threadCleaner.js";
+import { initializeSettingsChannels } from "../services/settingsChannel.js";
 
 export function createDiscordClient(_config?: AppConfig): { client: Client; sessionManager: SessionManager } {
   const client = new Client({
@@ -36,6 +37,9 @@ export function createDiscordClient(_config?: AppConfig): { client: Client; sess
 
     // Start thread cleaner to auto-delete threads older than 7 days
     startThreadCleaner(client);
+
+    // Initialize settings channels in all guilds
+    await initializeSettingsChannels(client);
 
     // Watch for config changes and send buttons to newly added channels
     onConfigChange(async (oldConfig, newConfig) => {

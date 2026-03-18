@@ -12,12 +12,21 @@ import { getConfig } from "../../config.js";
 import type { SessionManager } from "../../claude/sessionManager.js";
 import { createSessionButtons } from "../components/closeAllSessionsButton.js";
 import { createModeSelect } from "../components/modeButtons.js";
+import { handleSettingsButton, handleAddProjectModal } from "../components/settingsButtons.js";
 
 export function handleInteractionCreate(_config: AppConfig, sessionManager: SessionManager) {
   return async (interaction: Interaction) => {
-    // Handle modal submissions (for custom question input)
+    // Handle modal submissions
     if (interaction.isModalSubmit()) {
       const customId = interaction.customId;
+
+      // Handle settings modals
+      if (customId === "settings:add_project_modal") {
+        await handleAddProjectModal(interaction);
+        return;
+      }
+
+      // Handle question modals
       if (customId.startsWith("question_modal:")) {
         const parts = customId.split(":");
         const toolUseId = parts[1];
@@ -114,6 +123,14 @@ export function handleInteractionCreate(_config: AppConfig, sessionManager: Sess
 
     if (!interaction.isButton()) return;
 
+    const customId = interaction.customId;
+
+    // Handle settings buttons (before whitelist check - settings should work for admins)
+    if (customId.startsWith("settings:")) {
+      await handleSettingsButton(interaction);
+      return;
+    }
+
     // Get fresh config for hot-reload support
     const config = getConfig();
 
@@ -122,8 +139,6 @@ export function handleInteractionCreate(_config: AppConfig, sessionManager: Sess
       await interaction.reply({ content: "*You are not authorized to use this button.*", ephemeral: true });
       return;
     }
-
-    const customId = interaction.customId;
 
     // Handle new session button (in parent channel, not thread)
     if (customId === "new_session") {
