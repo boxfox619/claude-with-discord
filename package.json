@@ -1,11 +1,38 @@
 {
   "name": "claude-with-discord",
   "version": "1.0.0",
+  "description": "A Discord bot that enables interaction with Claude Code through Discord channels",
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",
-    "start": "tsx src/index.ts"
+    "start": "tsx src/index.ts",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\""
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "claude",
+    "anthropic",
+    "ai",
+    "claude-code",
+    "agent"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anthropics/claude-with-discord.git"
+  },
+  "bugs": {
+    "url": "https://github.com/anthropics/claude-with-discord/issues"
+  },
+  "homepage": "https://github.com/anthropics/claude-with-discord#readme",
+  "engines": {
+    "node": ">=20.0.0"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.0",
@@ -17,7 +44,11 @@
     "typescript": "^5.9.3"
   },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
     "@types/node": "^20.0.0",
-    "tsx": "^4.19.0"
+    "eslint": "^9.0.0",
+    "prettier": "^3.2.0",
+    "tsx": "^4.19.0",
+    "typescript-eslint": "^8.0.0"
   }
 }

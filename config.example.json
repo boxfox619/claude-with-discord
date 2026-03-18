@@ -1,0 +1,19 @@
+{
+  "global_context": "Optional global context that will be included in all sessions. Use this to provide instructions or context that should apply to all channels.",
+  "channel_project_map": {
+    "DISCORD_CHANNEL_ID_1": "/path/to/your/project1",
+    "DISCORD_CHANNEL_ID_2": "/path/to/your/project2"
+  },
+  "channel_system_prompts": {
+    "DISCORD_CHANNEL_ID_1": "You are an AI agent working on Project 1.\n\n## Project Overview\nDescribe your project here.\n\n## Your Role\n1. Understand the codebase\n2. Help with development tasks\n3. Follow best practices",
+    "DISCORD_CHANNEL_ID_2": "You are an AI agent working on Project 2.\n\nCustomize this prompt for your specific project needs."
+  },
+  "permission_mode": "bypassPermissions",
+  "max_budget_usd": 50.0,
+  "max_turns": 200,
+  "max_concurrent_sessions": 20,
+  "session_timeout_minutes": 1440,
+  "allowed_users": [],
+  "tts_enabled": false,
+  "tts_voice": "en-US-AriaNeural"
+}

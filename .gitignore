@@ -1,7 +1,31 @@
 node_modules/
 dist/
+
+# Environment and secrets
 .env
+.env.local
+.env.*.local
+
+# Configuration (contains sensitive channel IDs and project paths)
 config.json
+claude-config.json
+
+# Logs
 bot.log
 *.log
+
+# Claude CLI data
 .claude/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+*.tsbuildinfo
