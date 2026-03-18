@@ -13,6 +13,12 @@ A Discord bot that enables interaction with [Claude Code](https://docs.anthropic
 - **Subsession Delegation**: Spawn parallel sub-agents for complex tasks
 - **Hot-Reload Configuration**: Update settings without restarting the bot
 
+## Requirements
+
+- Node.js 20+
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) authenticated
+- Discord Bot with **Manage Channels** permission
+
 ## Quick Start
 
 ### Automated Setup (Recommended)

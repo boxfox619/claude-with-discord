@@ -50,6 +50,7 @@ claude --version
    - `bot`
    - `applications.commands`
 3. Select bot permissions:
+   - **Manage Channels** (required for creating project channels)
    - Send Messages
    - Create Public Threads
    - Send Messages in Threads
