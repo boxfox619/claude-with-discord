@@ -16,7 +16,7 @@ echo "╚═══════════════════════�
 echo -e "${NC}"
 
 # Check Node.js
-echo -e "${YELLOW}[1/6] Checking Node.js...${NC}"
+echo -e "${YELLOW}[1/7] Checking Node.js...${NC}"
 if ! command -v node &> /dev/null; then
     echo -e "${RED}Node.js is not installed. Please install Node.js 20+ first.${NC}"
     echo "  - Using nvm: nvm install 20"
@@ -31,8 +31,16 @@ if [ "$NODE_VERSION" -lt 20 ]; then
 fi
 echo -e "${GREEN}  ✓ Node.js $(node -v) detected${NC}"
 
+# Check/Install PM2
+echo -e "${YELLOW}[2/7] Checking PM2...${NC}"
+if ! command -v pm2 &> /dev/null; then
+    echo -e "${YELLOW}  PM2 not found. Installing...${NC}"
+    npm install -g pm2
+fi
+echo -e "${GREEN}  ✓ PM2 installed${NC}"
+
 # Check Claude Code CLI
-echo -e "${YELLOW}[2/6] Checking Claude Code CLI...${NC}"
+echo -e "${YELLOW}[3/7] Checking Claude Code CLI...${NC}"
 if ! command -v claude &> /dev/null; then
     echo -e "${YELLOW}  Claude Code CLI not found. Installing...${NC}"
     npm install -g @anthropic-ai/claude-code
@@ -40,7 +48,7 @@ fi
 echo -e "${GREEN}  ✓ Claude Code CLI installed${NC}"
 
 # Check Claude authentication
-echo -e "${YELLOW}[3/6] Checking Claude authentication...${NC}"
+echo -e "${YELLOW}[4/7] Checking Claude authentication...${NC}"
 if [ ! -f ~/.claude/.credentials.json ]; then
     echo -e "${YELLOW}  Claude Code is not authenticated. Starting login...${NC}"
     claude login
@@ -48,12 +56,12 @@ fi
 echo -e "${GREEN}  ✓ Claude Code authenticated${NC}"
 
 # Install dependencies
-echo -e "${YELLOW}[4/6] Installing dependencies...${NC}"
+echo -e "${YELLOW}[5/7] Installing dependencies...${NC}"
 npm install
 echo -e "${GREEN}  ✓ Dependencies installed${NC}"
 
 # Setup .env
-echo -e "${YELLOW}[5/6] Setting up environment...${NC}"
+echo -e "${YELLOW}[6/7] Setting up environment...${NC}"
 if [ ! -f .env ]; then
     cp .env.example .env
 
@@ -75,7 +83,7 @@ else
 fi
 
 # Setup config.json
-echo -e "${YELLOW}[6/6] Setting up configuration...${NC}"
+echo -e "${YELLOW}[7/7] Setting up configuration...${NC}"
 if [ ! -f config.json ]; then
     cp config.example.json config.json
 
@@ -121,11 +129,11 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║          Setup Complete!                   ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "To start the bot:"
-echo -e "  ${BLUE}npm start${NC}"
-echo ""
-echo -e "Or in development mode:"
-echo -e "  ${BLUE}npm run dev${NC}"
+echo -e "Bot commands:"
+echo -e "  ${BLUE}pm2 start ecosystem.config.cjs${NC}  - Start the bot"
+echo -e "  ${BLUE}pm2 logs claude-discord${NC}         - View logs"
+echo -e "  ${BLUE}pm2 reload claude-discord${NC}       - Restart the bot"
+echo -e "  ${BLUE}pm2 status${NC}                      - Check status"
 echo ""
 echo -e "Edit ${YELLOW}config.json${NC} to add more channels."
 echo ""
@@ -135,5 +143,7 @@ echo -e "${BLUE}Start the bot now? (y/n)${NC}"
 read -r START_NOW
 
 if [ "$START_NOW" = "y" ] || [ "$START_NOW" = "Y" ]; then
-    npm start
+    pm2 start ecosystem.config.cjs
+    echo ""
+    echo -e "${GREEN}Bot started! View logs with: pm2 logs claude-discord${NC}"
 fi
