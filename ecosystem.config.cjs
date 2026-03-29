@@ -22,7 +22,7 @@ module.exports = {
       stop_exit_codes: [],         // 모든 exit code에서 재시작 (빈 배열 = 항상 재시작)
       env: {
         NODE_ENV: "production",
-        PATH: "/Users/boxfox/.nvm/versions/node/v20.10.0/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        PATH: "/Users/boxfox/.local/bin:/Users/boxfox/.nvm/versions/node/v20.10.0/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
       },
     },
   ],

@@ -45,6 +45,20 @@ export interface AppConfig {
   // TTS settings
   tts_enabled?: boolean;  // Enable TTS for Claude responses (default: false)
   tts_voice?: string;  // Voice to use: ko-KR-SunHiNeural (female), ko-KR-InJoonNeural (male)
+  // Visualization settings
+  visualization_enabled?: boolean;  // Enable web visualization (default: false)
+  visualization_port?: number;  // Web server port (default: 3848)
+  visualization_password?: string;  // Password for web access (required if enabled)
+  visualization_channels?: Record<string, ChannelDisplayConfig>;  // Channel display settings
+  // Settings channel for bot notifications
+  settings_channel_id?: string;  // Discord channel ID for bot status notifications
+}
+
+export interface ChannelDisplayConfig {
+  name?: string;       // Custom display name (overrides Discord channel name)
+  order?: number;      // Sort order (lower = higher priority, default: 999)
+  collapsed?: boolean; // Start collapsed (default: false)
+  hidden?: boolean;    // Hide from dashboard (default: false)
 }
 
 export interface QuestionOption {
@@ -218,3 +232,55 @@ export const ALIAS_RULES = {
   maxLength: 30,
   reserved: ["main", "parent", "system", "all", "self", "me", "root"],
 } as const;
+
+// ============================================
+// Visualization Types
+// ============================================
+
+export type VisualSessionStatus = 'idle' | 'processing' | 'waiting_permission' | 'error';
+
+export interface VisualSession {
+  sessionId: string;
+  threadId: string;
+  channelId: string;
+  channelName: string;
+  status: VisualSessionStatus;
+  mode: SessionMode;
+  cost: number;
+  lastActivity: number;
+  isSubsession: boolean;
+  parentThreadId?: string;
+  alias?: string;
+  subsessions?: VisualSession[];
+}
+
+export interface VisualChannel {
+  channelId: string;
+  channelName: string;
+  projectPath: string;
+  sessions: VisualSession[];
+  order?: number;      // Sort order (lower = higher)
+  collapsed?: boolean; // Start collapsed state
+}
+
+export interface ConversationMessage {
+  id: string;
+  timestamp: number;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  cost?: number;
+}
+
+// WebSocket message types
+export interface WsServerMessage {
+  type: 'sessions' | 'message' | 'session_update' | 'conversation' | 'auth_required' | 'auth_result' | 'error' | 'session_created';
+  data: unknown;
+}
+
+export interface WsClientMessage {
+  type: 'auth' | 'subscribe' | 'unsubscribe' | 'send_message' | 'get_sessions' | 'create_session';
+  password?: string;
+  threadId?: string;
+  channelId?: string;
+  content?: string;
+}

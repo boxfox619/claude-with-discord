@@ -45,15 +45,6 @@ The `permission_mode` setting controls Claude Code's tool execution:
 
 - Channel-to-project mappings give Claude Code access to those directories
 - Only map directories you trust Claude to read/write
-- Consider using Docker volumes for isolation
-
-### Docker Security
-
-When running in Docker:
-- Don't mount sensitive host directories
-- Use read-only mounts where possible (`:ro`)
-- Set appropriate resource limits
-- Run as non-root user if possible
 
 ## Best Practices
 

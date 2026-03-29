@@ -1,5 +1,19 @@
-import { tts, type options as TTSOptions } from "edge-tts";
 import { getConfig } from "../config.js";
+
+// edge-tts ships uncompiled .ts as main entry, so we lazy-import the compiled output
+let _tts: ((text: string, options: { voice: string }) => Promise<Buffer>) | null = null;
+async function getTTS() {
+  if (!_tts) {
+    try {
+      const mod = await import("edge-tts/out/index.js");
+      _tts = mod.tts ?? (mod as Record<string, unknown>).default as typeof _tts;
+    } catch {
+      console.warn("edge-tts not available, TTS disabled");
+      _tts = null;
+    }
+  }
+  return _tts;
+}
 
 export interface TTSConfig {
   tts_enabled?: boolean;
@@ -49,11 +63,10 @@ export async function generateAudio(
     : cleanText;
 
   try {
-    const options: TTSOptions = {
-      voice: selectedVoice,
-    };
+    const ttsFn = await getTTS();
+    if (!ttsFn) return null;
 
-    const audioBuffer = await tts(truncatedText, options);
+    const audioBuffer = await ttsFn(truncatedText, { voice: selectedVoice });
     return audioBuffer;
   } catch (error) {
     console.error("TTS generation error:", error);

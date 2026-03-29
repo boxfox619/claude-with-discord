@@ -44,7 +44,6 @@ Set up this Discord bot for me:
 
 - **[Setup Script](scripts/setup.sh)** - Run `./scripts/setup.sh` directly
 - **[Setup Guide](docs/SETUP.md)** - Step-by-step manual instructions
-- **[Docker Guide](docs/DOCKER.md)** - Container deployment
 
 ## Usage
 
@@ -126,7 +125,6 @@ src/
 ## Documentation
 
 - [Setup Guide](docs/SETUP.md) - Detailed installation instructions
-- [Docker Guide](docs/DOCKER.md) - Container deployment
 - [Contributing](CONTRIBUTING.md) - Contribution guidelines
 - [Security](SECURITY.md) - Security policy
 

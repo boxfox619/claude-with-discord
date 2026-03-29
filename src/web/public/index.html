@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Visualization</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>Agent Visualization</h1>
+      <div class="header-controls">
+        <span id="connection-status" class="status-disconnected">Disconnected</span>
+        <button id="logout-btn">Logout</button>
+      </div>
+    </header>
+
+    <main>
+      <div id="world">
+        <!-- Channels (rooms) will be rendered here -->
+      </div>
+
+      <div id="chat-panel" class="hidden">
+        <div class="chat-header">
+          <div class="chat-title">
+            <span id="chat-session-name">Session</span>
+            <span id="chat-session-status" class="session-status idle">idle</span>
+          </div>
+          <button id="close-chat-btn">&times;</button>
+        </div>
+        <div id="chat-info">
+          <span class="info-item">Mode: <span id="chat-mode">action</span></span>
+          <span class="info-item">Cost: $<span id="chat-cost">0.0000</span></span>
+        </div>
+        <div id="chat-messages">
+          <!-- Messages will be rendered here -->
+        </div>
+        <form id="chat-form">
+          <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off">
+          <button type="submit">Send</button>
+        </form>
+      </div>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

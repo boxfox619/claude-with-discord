@@ -84,7 +84,7 @@ Examples:
 ```
 feat: add voice message support
 fix: resolve session timeout issue
-docs: update README with Docker instructions
+docs: update README with setup instructions
 ```
 
 ## Project Structure

@@ -190,36 +190,6 @@ pm2 logs claude-discord
 pm2 reload claude-discord
 ```
 
-## Docker Setup
-
-### Using Docker Compose
-
-```bash
-# Build and start
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop
-docker-compose down
-```
-
-### Manual Docker Build
-
-```bash
-# Build image
-docker build -t claude-discord .
-
-# Run container
-docker run -d \
-  --name claude-discord \
-  --env-file .env \
-  -v $(pwd)/config.json:/app/config.json:ro \
-  -v /path/to/projects:/app/projects \
-  claude-discord
-```
-
 ## Usage
 
 ### Starting a Session

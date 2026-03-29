@@ -31,12 +31,15 @@ import { saveDiscordImage, formatPendingImagesList } from "../utils/imageSaver.j
 import { generateAudio, extractTextForTTS } from "../utils/audioGenerator.js";
 import { isAuthenticated, startLogin, type LoginSession } from "../services/claudeAuth.js";
 
+export type MessageCallback = (threadId: string, role: 'user' | 'assistant' | 'system', content: string, cost?: number) => void;
+
 export class SessionManager {
   private sessions = new Map<string, SessionInfo>();
   private cleanupInterval: ReturnType<typeof setInterval>;
   private client: Client | null = null;
   private pendingLoginSession: LoginSession | null = null;
   private pendingLoginResolve: ((token: string) => void) | null = null;
+  private messageCallbacks: MessageCallback[] = [];
 
   /**
    * Get the current config (hot-reloaded).
@@ -310,6 +313,9 @@ export class SessionManager {
 
     try {
       await thread.sendTyping();
+
+      // Emit user message for visualization
+      this.emitMessage(threadId, 'user', userMessage);
 
       const abortController = session?.abortController ?? new AbortController();
 
@@ -594,6 +600,9 @@ export class SessionManager {
             if (text && text !== lastTextMessage) {
               lastTextMessage = text;
               const chunks = splitMessage(text);
+
+              // Emit message for visualization
+              this.emitMessage(threadId, 'assistant', text);
 
               // Send all chunks, with TTS on the last chunk if enabled
               for (let i = 0; i < chunks.length; i++) {
@@ -1375,5 +1384,43 @@ ${description}
       return session.parentThreadId;
     }
     return undefined;
+  }
+
+  // ============================================
+  // Visualization Support
+  // ============================================
+
+  /**
+   * Register a callback to receive message events for visualization.
+   */
+  onMessage(callback: MessageCallback): void {
+    this.messageCallbacks.push(callback);
+  }
+
+  /**
+   * Emit a message event to all registered callbacks.
+   */
+  private emitMessage(threadId: string, role: 'user' | 'assistant' | 'system', content: string, cost?: number): void {
+    for (const callback of this.messageCallbacks) {
+      try {
+        callback(threadId, role, content, cost);
+      } catch (err) {
+        console.error('[SessionManager] Message callback error:', err);
+      }
+    }
+  }
+
+  /**
+   * Get all active sessions (for visualization).
+   */
+  getAllSessions(): Map<string, SessionInfo> {
+    return this.sessions;
+  }
+
+  /**
+   * Get Discord client reference (for visualization).
+   */
+  getDiscordClient(): Client | null {
+    return this.client;
   }
 }

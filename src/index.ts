@@ -1,11 +1,12 @@
 import "dotenv/config";
-import { loadConfig, destroyConfigManager } from "./config.js";
+import { loadConfig, getConfig, destroyConfigManager } from "./config.js";
 import { createDiscordClient } from "./discord/client.js";
 import {
   setupGlobalErrorHandlers,
   setupDiscordErrorHandlers,
   setErrorNotifierClient,
 } from "./errorNotifier.js";
+import { VisualizationServer } from "./web/server.js";
 
 // Setup global error handlers early (before Discord client is ready)
 setupGlobalErrorHandlers();
@@ -25,6 +26,31 @@ const { client, sessionManager } = createDiscordClient();
 setErrorNotifierClient(client);
 setupDiscordErrorHandlers(client);
 
+// Initialize visualization server if enabled
+let visualizationServer: VisualizationServer | null = null;
+
+client.once("ready", () => {
+  const config = getConfig();
+  if (config.visualization_enabled && config.visualization_password) {
+    visualizationServer = new VisualizationServer(sessionManager, client);
+
+    // Connect message events to visualization
+    sessionManager.onMessage((threadId, role, content, cost) => {
+      visualizationServer?.getWsHandler().addToConversation(threadId, {
+        id: Date.now().toString(),
+        timestamp: Date.now(),
+        role,
+        content,
+        cost,
+      });
+    });
+
+    visualizationServer.start();
+  } else if (config.visualization_enabled && !config.visualization_password) {
+    console.warn("Visualization is enabled but no password is set. Skipping visualization server.");
+  }
+});
+
 // Graceful shutdown
 let isShuttingDown = false;
 
@@ -33,6 +59,11 @@ async function shutdown() {
   isShuttingDown = true;
 
   console.log("\nShutting down gracefully...");
+
+  // Shutdown visualization server
+  if (visualizationServer) {
+    visualizationServer.destroy();
+  }
 
   try {
     await sessionManager.gracefulShutdown();
