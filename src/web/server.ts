@@ -9,6 +9,7 @@ import type { SessionManager } from '../claude/sessionManager.js';
 import type { Client, TextChannel } from 'discord.js';
 import { getConfig } from '../config.js';
 import { authMiddleware, validatePassword, createSession, destroySession, getClientIp, isLockedOut, recordFailedAttempt, clearFailedAttempts } from './auth.js';
+import { updateConfig } from '../config.js';
 import { WsHandler } from './wsHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -104,6 +105,108 @@ export class VisualizationServer {
       }
       res.clearCookie('viz_session');
       res.json({ success: true });
+    });
+
+    // Get channel order
+    this.app.get('/api/channel-order', (_req: Request, res: Response) => {
+      const config = getConfig();
+      res.json({ order: config.visualization_channel_order || [] });
+    });
+
+    // Save channel order
+    this.app.post('/api/channel-order', async (req: Request, res: Response) => {
+      const { order } = req.body;
+      if (!Array.isArray(order)) {
+        res.status(400).json({ success: false, error: 'Invalid order format' });
+        return;
+      }
+      try {
+        await updateConfig({ visualization_channel_order: order });
+        res.json({ success: true });
+      } catch (err) {
+        console.error('Failed to save channel order:', err);
+        res.status(500).json({ success: false, error: 'Failed to save' });
+      }
+    });
+
+    // Get collapsed channels
+    this.app.get('/api/collapsed-channels', (_req: Request, res: Response) => {
+      const config = getConfig();
+      res.json({ collapsed: config.visualization_collapsed_channels || [] });
+    });
+
+    // Save collapsed channels
+    this.app.post('/api/collapsed-channels', async (req: Request, res: Response) => {
+      const { collapsed } = req.body;
+      if (!Array.isArray(collapsed)) {
+        res.status(400).json({ success: false, error: 'Invalid collapsed format' });
+        return;
+      }
+      try {
+        await updateConfig({ visualization_collapsed_channels: collapsed });
+        res.json({ success: true });
+      } catch (err) {
+        console.error('Failed to save collapsed channels:', err);
+        res.status(500).json({ success: false, error: 'Failed to save' });
+      }
+    });
+
+    // Get channel emojis
+    this.app.get('/api/channel-emojis', (_req: Request, res: Response) => {
+      const config = getConfig();
+      res.json({ emojis: config.visualization_channel_emojis || {} });
+    });
+
+    // Save channel emoji
+    this.app.post('/api/channel-emojis', async (req: Request, res: Response) => {
+      const { channelId, emoji } = req.body;
+      if (!channelId || typeof channelId !== 'string') {
+        res.status(400).json({ success: false, error: 'Invalid channelId' });
+        return;
+      }
+      try {
+        const config = getConfig();
+        const emojis = { ...(config.visualization_channel_emojis || {}) };
+        if (emoji) {
+          emojis[channelId] = emoji;
+        } else {
+          delete emojis[channelId];
+        }
+        await updateConfig({ visualization_channel_emojis: emojis });
+        res.json({ success: true });
+      } catch (err) {
+        console.error('Failed to save channel emoji:', err);
+        res.status(500).json({ success: false, error: 'Failed to save' });
+      }
+    });
+
+    // Get channel system prompts
+    this.app.get('/api/channel-prompts', (_req: Request, res: Response) => {
+      const config = getConfig();
+      res.json({ prompts: config.channel_system_prompts || {} });
+    });
+
+    // Save channel system prompt
+    this.app.post('/api/channel-prompts', async (req: Request, res: Response) => {
+      const { channelId, prompt } = req.body;
+      if (!channelId || typeof channelId !== 'string') {
+        res.status(400).json({ success: false, error: 'Invalid channelId' });
+        return;
+      }
+      try {
+        const config = getConfig();
+        const prompts = { ...(config.channel_system_prompts || {}) };
+        if (prompt && prompt.trim()) {
+          prompts[channelId] = prompt.trim();
+        } else {
+          delete prompts[channelId];
+        }
+        await updateConfig({ channel_system_prompts: prompts });
+        res.json({ success: true });
+      } catch (err) {
+        console.error('Failed to save channel prompt:', err);
+        res.status(500).json({ success: false, error: 'Failed to save' });
+      }
     });
 
     // Static files

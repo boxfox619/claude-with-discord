@@ -12,6 +12,7 @@ import { getConfig } from "../../config.js";
 import type { SessionManager } from "../../claude/sessionManager.js";
 import { createSessionButtons } from "../components/closeAllSessionsButton.js";
 import { createModeSelect } from "../components/modeButtons.js";
+import { type ModelChoice, getModelId, getModelLabel } from "../components/modelSelect.js";
 import { handleSettingsButton, handleAddProjectModal } from "../components/settingsButtons.js";
 
 export function handleInteractionCreate(_config: AppConfig, sessionManager: SessionManager) {
@@ -73,6 +74,21 @@ export function handleInteractionCreate(_config: AppConfig, sessionManager: Sess
         const mode = interaction.values[0] as SessionMode;
         await interaction.deferUpdate();
         await sessionManager.setMode(channel.id, mode, channel);
+        return;
+      }
+
+      // Handle model select
+      if (customId === "model_select") {
+        const channel = interaction.channel;
+        if (!channel || (channel.type !== ChannelType.PublicThread && channel.type !== ChannelType.PrivateThread)) {
+          return;
+        }
+
+        const modelChoice = interaction.values[0] as ModelChoice;
+        const modelId = getModelId(modelChoice);
+        const modelName = getModelLabel(modelChoice);
+        await interaction.deferUpdate();
+        await sessionManager.setModel(channel.id, modelId, modelName, channel);
         return;
       }
 
@@ -191,10 +207,11 @@ export function handleInteractionCreate(_config: AppConfig, sessionManager: Sess
         components: [createSessionButtons(sessionCount)],
       });
 
-      // Send initial message in thread with mode select
+      // Send initial message in thread with mode and model select
+      const { createModelSelect } = await import("../components/modelSelect.js");
       await thread.send({
         content: "*Session ready. Send a message to start.*",
-        components: [createModeSelect("action")],
+        components: [createModeSelect("action"), createModelSelect("opus")],
       });
 
       return;

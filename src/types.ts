@@ -1,3 +1,4 @@
+import type { Message } from "discord.js";
 import type { Query, PermissionResult, PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 
 export type SessionMode = "action" | "plan" | "ask";
@@ -27,6 +28,7 @@ export interface QueuedMessage {
   images: ImageContent[];
   pendingImages: PendingImage[];
   audioTranscriptions?: AudioTranscription[];
+  userDiscordMessage?: Message;
 }
 
 export interface AppConfig {
@@ -52,6 +54,12 @@ export interface AppConfig {
   visualization_channels?: Record<string, ChannelDisplayConfig>;  // Channel display settings
   // Settings channel for bot notifications
   settings_channel_id?: string;  // Discord channel ID for bot status notifications
+  // User-defined channel order for visualization
+  visualization_channel_order?: string[];  // Ordered list of channel IDs
+  // User-defined collapsed channels for visualization
+  visualization_collapsed_channels?: string[];  // List of collapsed channel IDs
+  // User-defined channel emojis for visualization
+  visualization_channel_emojis?: Record<string, string>;  // channelId -> emoji
 }
 
 export interface ChannelDisplayConfig {
@@ -59,6 +67,10 @@ export interface ChannelDisplayConfig {
   order?: number;      // Sort order (lower = higher priority, default: 999)
   collapsed?: boolean; // Start collapsed (default: false)
   hidden?: boolean;    // Hide from dashboard (default: false)
+}
+
+export interface VisualizationSettings {
+  channel_order?: string[];  // Ordered list of channel IDs
 }
 
 export interface QuestionOption {
@@ -104,6 +116,7 @@ export interface BaseSessionInfo {
   lastActivityAt: number;
   isProcessing: boolean;
   mode: SessionMode;
+  model?: string;
   pendingPermission?: PendingPermission;
   pendingImages?: PendingImage[];
   messageQueue: QueuedMessage[];
@@ -239,6 +252,13 @@ export const ALIAS_RULES = {
 
 export type VisualSessionStatus = 'idle' | 'processing' | 'waiting_permission' | 'error';
 
+export interface QueuedMessageInfo {
+  index: number;
+  content: string;
+  hasFiles: boolean;
+  timestamp: number;
+}
+
 export interface VisualSession {
   sessionId: string;
   threadId: string;
@@ -252,6 +272,7 @@ export interface VisualSession {
   parentThreadId?: string;
   alias?: string;
   subsessions?: VisualSession[];
+  queuedMessages?: QueuedMessageInfo[];
 }
 
 export interface VisualChannel {
@@ -273,14 +294,22 @@ export interface ConversationMessage {
 
 // WebSocket message types
 export interface WsServerMessage {
-  type: 'sessions' | 'message' | 'session_update' | 'conversation' | 'auth_required' | 'auth_result' | 'error' | 'session_created';
+  type: 'sessions' | 'message' | 'session_update' | 'conversation' | 'auth_required' | 'auth_result' | 'error' | 'session_created' | 'queue_updated';
   data: unknown;
 }
 
+export interface WsFileAttachment {
+  name: string;
+  type: string;
+  data: string; // base64 data URL
+}
+
 export interface WsClientMessage {
-  type: 'auth' | 'subscribe' | 'unsubscribe' | 'send_message' | 'get_sessions' | 'create_session';
+  type: 'auth' | 'subscribe' | 'unsubscribe' | 'send_message' | 'get_sessions' | 'create_session' | 'cancel_queued';
   password?: string;
   threadId?: string;
   channelId?: string;
   content?: string;
+  files?: WsFileAttachment[];
+  queueIndex?: number;
 }

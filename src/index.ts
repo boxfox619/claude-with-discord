@@ -7,6 +7,7 @@ import {
   setErrorNotifierClient,
 } from "./errorNotifier.js";
 import { VisualizationServer } from "./web/server.js";
+import { closeMessageStore } from "./db/messageStore.js";
 
 // Setup global error handlers early (before Discord client is ready)
 setupGlobalErrorHandlers();
@@ -72,6 +73,7 @@ async function shutdown() {
   }
 
   destroyConfigManager();
+  closeMessageStore();
   client.destroy();
   process.exit(0);
 }

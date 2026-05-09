@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Agent Visualization</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/style.css?v=3">
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 </head>
 <body>
   <div id="app">
@@ -33,10 +34,21 @@
           <span class="info-item">Mode: <span id="chat-mode">action</span></span>
           <span class="info-item">Cost: $<span id="chat-cost">0.0000</span></span>
         </div>
+        <div id="queue-panel" class="hidden">
+          <div class="queue-header">
+            <span class="queue-icon">📋</span>
+            <span>Queued Messages</span>
+            <span id="queue-count" class="queue-count">0</span>
+          </div>
+          <div id="queue-list"></div>
+        </div>
         <div id="chat-messages">
           <!-- Messages will be rendered here -->
         </div>
+        <div id="file-preview" class="hidden"></div>
         <form id="chat-form">
+          <input type="file" id="file-input" multiple accept="image/*,.txt,.json,.md,.js,.ts,.py,.html,.css" hidden>
+          <button type="button" id="attach-btn" title="Attach file">📎</button>
           <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off">
           <button type="submit">Send</button>
         </form>

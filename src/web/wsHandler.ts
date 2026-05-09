@@ -1,11 +1,12 @@
 import { WebSocket, WebSocketServer } from 'ws';
 import type { IncomingMessage } from 'node:http';
 import type { SessionManager } from '../claude/sessionManager.js';
-import { ChannelType, type Client, type ThreadChannel, type Message } from 'discord.js';
-import type { VisualSession, VisualChannel, WsServerMessage, WsClientMessage, ConversationMessage, ChannelDisplayConfig } from '../types.js';
+import { ChannelType, type Client, type ThreadChannel } from 'discord.js';
+import type { VisualSession, VisualChannel, WsServerMessage, WsClientMessage, ConversationMessage, WsFileAttachment, QueuedMessageInfo } from '../types.js';
 import { validateWsAuth } from './auth.js';
 import { getConfig } from '../config.js';
 import { parse as parseCookie } from 'cookie';
+import { getMessageStore } from '../db/messageStore.js';
 
 interface AuthenticatedWebSocket extends WebSocket {
   isAuthenticated: boolean;
@@ -16,7 +17,6 @@ export class WsHandler {
   private wss: WebSocketServer;
   private sessionManager: SessionManager;
   private discordClient: Client;
-  private conversationHistory = new Map<string, ConversationMessage[]>();
   private broadcastInterval!: ReturnType<typeof setInterval>;
 
   constructor(wss: WebSocketServer, sessionManager: SessionManager, discordClient: Client) {
@@ -79,13 +79,18 @@ export class WsHandler {
           ws.subscribedThreadId = undefined;
           break;
         case 'send_message':
-          if (ws.isAuthenticated && message.threadId && message.content) {
-            this.handleSendMessage(ws, message.threadId, message.content);
+          if (ws.isAuthenticated && message.threadId && (message.content || message.files?.length)) {
+            this.handleSendMessage(ws, message.threadId, message.content || '', message.files);
           }
           break;
         case 'create_session':
           if (ws.isAuthenticated && message.channelId) {
             this.handleCreateSession(ws, message.channelId, message.content);
+          }
+          break;
+        case 'cancel_queued':
+          if (ws.isAuthenticated && message.threadId !== undefined && message.queueIndex !== undefined) {
+            this.handleCancelQueued(ws, message.threadId, message.queueIndex);
           }
           break;
       }
@@ -114,7 +119,31 @@ export class WsHandler {
     ws.subscribedThreadId = undefined;
   }
 
-  private async handleSendMessage(ws: AuthenticatedWebSocket, threadId: string, content: string): Promise<void> {
+  private handleCancelQueued(ws: AuthenticatedWebSocket, threadId: string, queueIndex: number): void {
+    try {
+      const session = this.sessionManager.getSession(threadId);
+      if (!session) {
+        this.send(ws, { type: 'error', data: { message: 'Session not found' } });
+        return;
+      }
+
+      // Access messageQueue directly
+      const sessionData = session as unknown as { messageQueue: unknown[] };
+      if (sessionData.messageQueue && sessionData.messageQueue.length > queueIndex) {
+        sessionData.messageQueue.splice(queueIndex, 1);
+        this.send(ws, { type: 'queue_updated', data: { threadId, cancelled: queueIndex } });
+        // Trigger broadcast to update all clients
+        this.broadcastSessions();
+      } else {
+        this.send(ws, { type: 'error', data: { message: 'Queue item not found' } });
+      }
+    } catch (err) {
+      console.error('[WsHandler] Failed to cancel queued message:', err);
+      this.send(ws, { type: 'error', data: { message: 'Failed to cancel' } });
+    }
+  }
+
+  private async handleSendMessage(ws: AuthenticatedWebSocket, threadId: string, content: string, files?: WsFileAttachment[]): Promise<void> {
     try {
       const session = this.sessionManager.getSession(threadId);
       if (!session) {
@@ -131,25 +160,51 @@ export class WsHandler {
 
       const thread = channel as ThreadChannel;
 
+      // Convert files to the format expected by sessionManager
+      const images: { type: 'image'; data: string; mediaType: string }[] = [];
+      const pendingImages: { index: number; url: string; filename: string; data: string; mediaType: string }[] = [];
+
+      if (files && files.length > 0) {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          // Extract base64 data from data URL (remove "data:image/png;base64," prefix)
+          const base64Match = file.data.match(/^data:([^;]+);base64,(.+)$/);
+          if (base64Match) {
+            const mediaType = base64Match[1];
+            const base64Data = base64Match[2];
+
+            if (file.type.startsWith('image/')) {
+              images.push({
+                type: 'image',
+                data: base64Data,
+                mediaType,
+              });
+            } else {
+              // For non-image files, add as pending image (will be saved to project)
+              pendingImages.push({
+                index: i,
+                url: file.data,
+                filename: file.name,
+                data: base64Data,
+                mediaType,
+              });
+            }
+          }
+        }
+      }
+
       // Send message through session manager
+      // Note: Message will be saved to DB and broadcast via sessionManager.emitMessage callback
       await this.sessionManager.sendMessage(
         threadId,
         session.channelId,
         session.projectPath,
         `[Web] ${content}`,
         thread,
-        [],
-        [],
+        images,
+        pendingImages,
         []
       );
-
-      // Add to conversation history
-      this.addToConversation(threadId, {
-        id: Date.now().toString(),
-        timestamp: Date.now(),
-        role: 'user',
-        content: `[Web] ${content}`,
-      });
 
     } catch (err) {
       console.error('[WsHandler] Failed to send message:', err);
@@ -193,6 +248,7 @@ export class WsHandler {
       await thread.send("*Session created from web. Send a message to start.*");
 
       // If initial message provided, send it immediately to start the session
+      // Note: Message will be saved to DB and broadcast via sessionManager.emitMessage callback
       if (initialMessage?.trim()) {
         await this.sessionManager.sendMessage(
           thread.id,
@@ -204,13 +260,6 @@ export class WsHandler {
           [],
           []
         );
-
-        this.addToConversation(thread.id, {
-          id: Date.now().toString(),
-          timestamp: Date.now(),
-          role: 'user',
-          content: `[Web] ${initialMessage}`,
-        });
       }
 
       // Notify client of new session
@@ -307,6 +356,7 @@ export class WsHandler {
         parentThreadId?: string;
         alias?: string;
         childSubsessions?: Map<number, { threadId: string }>;
+        messageQueue?: Array<{ userMessage: string; images?: unknown[]; pendingImages?: unknown[] }>;
       };
 
       const channelData = channelMap.get(session.channelId);
@@ -331,6 +381,19 @@ export class WsHandler {
         status = 'processing';
       }
 
+      // Build queued messages info
+      const queuedMessages: QueuedMessageInfo[] = [];
+      if (session.messageQueue && session.messageQueue.length > 0) {
+        session.messageQueue.forEach((msg, idx) => {
+          queuedMessages.push({
+            index: idx,
+            content: msg.userMessage.length > 50 ? msg.userMessage.substring(0, 50) + '...' : msg.userMessage,
+            hasFiles: (msg.images?.length || 0) > 0 || (msg.pendingImages?.length || 0) > 0,
+            timestamp: Date.now(), // We don't have the exact timestamp, use current
+          });
+        });
+      }
+
       const visualSession: VisualSession = {
         sessionId: session.sessionId,
         threadId: session.threadId,
@@ -344,6 +407,7 @@ export class WsHandler {
         parentThreadId: session.parentThreadId,
         alias: session.alias,
         subsessions: [],
+        queuedMessages: queuedMessages.length > 0 ? queuedMessages : undefined,
       };
 
       // If main session, add to channel
@@ -387,74 +451,27 @@ export class WsHandler {
 
   private async sendConversation(ws: AuthenticatedWebSocket, threadId: string): Promise<void> {
     try {
-      // Fetch messages from Discord API
-      const channel = await this.discordClient.channels.fetch(threadId);
-      if (!channel || (channel.type !== ChannelType.PublicThread && channel.type !== ChannelType.PrivateThread)) {
-        // Fallback to in-memory history
-        const history = this.conversationHistory.get(threadId) || [];
-        this.send(ws, { type: 'conversation', data: { threadId, messages: history } });
-        return;
-      }
+      // Fetch messages from local DB
+      const messageStore = getMessageStore();
+      const storedMessages = messageStore.getMessages(threadId, 100);
 
-      const thread = channel as ThreadChannel;
-      const discordMessages = await thread.messages.fetch({ limit: 100 });
-
-      // Convert Discord messages to ConversationMessage format
-      const messages: ConversationMessage[] = [];
-      const sortedMessages = [...discordMessages.values()].sort(
-        (a, b) => a.createdTimestamp - b.createdTimestamp
-      );
-
-      for (const discordMsg of sortedMessages) {
-        // Determine role based on author
-        let role: 'user' | 'assistant' | 'system' = 'user';
-        if (discordMsg.author.bot && discordMsg.author.id === this.discordClient.user?.id) {
-          role = 'assistant';
-        } else if (discordMsg.author.bot) {
-          role = 'system';
-        }
-
-        // Skip empty messages
-        const content = discordMsg.content.trim();
-        if (!content && discordMsg.attachments.size === 0) continue;
-
-        messages.push({
-          id: discordMsg.id,
-          timestamp: discordMsg.createdTimestamp,
-          role,
-          content: content || (discordMsg.attachments.size > 0 ? `[${discordMsg.attachments.size} attachment(s)]` : ''),
-        });
-      }
-
-      // Merge with in-memory history for recent messages not yet in Discord
-      const inMemoryHistory = this.conversationHistory.get(threadId) || [];
-      const lastDiscordTimestamp = messages.length > 0 ? messages[messages.length - 1].timestamp : 0;
-      const recentInMemory = inMemoryHistory.filter(m => m.timestamp > lastDiscordTimestamp);
-      messages.push(...recentInMemory);
+      const messages: ConversationMessage[] = storedMessages.map(msg => ({
+        id: msg.id,
+        timestamp: msg.timestamp,
+        role: msg.role,
+        content: msg.content,
+        cost: msg.cost,
+      }));
 
       this.send(ws, { type: 'conversation', data: { threadId, messages } });
     } catch (err) {
-      console.error('[WsHandler] Failed to fetch Discord messages:', err);
-      // Fallback to in-memory history
-      const history = this.conversationHistory.get(threadId) || [];
-      this.send(ws, { type: 'conversation', data: { threadId, messages: history } });
+      console.error('[WsHandler] Failed to fetch messages from DB:', err);
+      this.send(ws, { type: 'conversation', data: { threadId, messages: [] } });
     }
   }
 
-  // Public method to add messages to conversation history
+  // Public method to broadcast new message to subscribed clients
   addToConversation(threadId: string, message: ConversationMessage): void {
-    let history = this.conversationHistory.get(threadId);
-    if (!history) {
-      history = [];
-      this.conversationHistory.set(threadId, history);
-    }
-    history.push(message);
-
-    // Limit history size
-    if (history.length > 100) {
-      history.shift();
-    }
-
     // Broadcast to subscribed clients
     for (const client of this.wss.clients) {
       const authClient = client as AuthenticatedWebSocket;

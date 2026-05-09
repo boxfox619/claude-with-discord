@@ -1,7 +1,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { execSync } from "node:child_process";
 import type { PermissionResult, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { AttachmentBuilder, type Client, type ThreadChannel } from "discord.js";
+import { AttachmentBuilder, type Client, type Message, type ThreadChannel } from "discord.js";
 import type {
   AppConfig,
   SessionInfo,
@@ -24,6 +24,7 @@ import { initMcpServerConfig, createMcpServerForSession } from "../mcp/subsessio
 import { formatAssistantMessage, formatResultMessage, generateThreadTitle } from "./messageFormatter.js";
 import { splitMessage, truncateMessage } from "../discord/utils/messageSplitter.js";
 import { createEndSessionButton } from "../discord/components/endSessionButton.js";
+import { getMessageStore } from "../db/messageStore.js";
 import { createModeSelect, getModeDescription } from "../discord/components/modeButtons.js";
 import { createPermissionButtons, formatPermissionRequest, isAskUserQuestion } from "../discord/components/permissionButtons.js";
 import { createQuestionComponents, formatQuestionMessage, type Question } from "../discord/components/questionButtons.js";
@@ -35,6 +36,7 @@ export type MessageCallback = (threadId: string, role: 'user' | 'assistant' | 's
 
 export class SessionManager {
   private sessions = new Map<string, SessionInfo>();
+  private pendingModels = new Map<string, string>(); // threadId -> modelId (before session creation)
   private cleanupInterval: ReturnType<typeof setInterval>;
   private client: Client | null = null;
   private pendingLoginSession: LoginSession | null = null;
@@ -156,6 +158,50 @@ export class SessionManager {
   }
 
   /**
+   * Replace the bot's reaction on a user message with a single emoji.
+   * Removes any prior bot reactions, then adds the new one. No-op if message is missing.
+   */
+  private async setReaction(message: Message | undefined, emoji: string): Promise<void> {
+    if (!message) return;
+    try {
+      const me = message.client.user?.id;
+      for (const reaction of message.reactions.cache.values()) {
+        if (reaction.emoji.name === emoji) continue;
+        if (me && reaction.users.cache.has(me)) {
+          await reaction.users.remove(me).catch(() => {});
+        }
+      }
+      await message.react(emoji).catch(() => {});
+    } catch {
+      // Reactions are best-effort; never let them break processing.
+    }
+  }
+
+  /**
+   * Set the model for a session.
+   */
+  async setModel(threadId: string, model: string, modelLabel: string, thread: ThreadChannel): Promise<void> {
+    const session = this.sessions.get(threadId);
+    if (session) {
+      session.model = model;
+      // If session is already active, update the model via SDK
+      if (session.query) {
+        try {
+          await session.query.setModel(model);
+        } catch (err) {
+          console.error(`[SessionManager] Failed to setModel for ${threadId}:`, err);
+        }
+      }
+    } else {
+      // Session not yet created - store for when it's created
+      this.pendingModels.set(threadId, model);
+    }
+    await thread.send({
+      content: `*Model changed to **${modelLabel}**.*`,
+    });
+  }
+
+  /**
    * Format a single question for display.
    */
   private formatSingleQuestion(question: Question, index: number, total: number): string {
@@ -231,6 +277,7 @@ export class SessionManager {
     images: ImageContent[] = [],
     pendingImages: PendingImage[] = [],
     audioTranscriptions: AudioTranscription[] = [],
+    userDiscordMessage?: Message,
   ): Promise<void> {
     let session = this.sessions.get(threadId);
 
@@ -301,21 +348,30 @@ export class SessionManager {
           images,
           pendingImages,
           audioTranscriptions,
+          userDiscordMessage,
         };
         session.messageQueue.push(queuedMessage);
         const queuePosition = session.messageQueue.length;
+        this.setReaction(userDiscordMessage, "⏳");
         await thread.send(`*Message queued (position: ${queuePosition}). Will be processed after current task completes.*`);
         return;
       }
       session.isProcessing = true;
       session.lastActivityAt = Date.now();
     }
+    this.setReaction(userDiscordMessage, "🤔");
 
     try {
-      await thread.sendTyping();
+      // Fire-and-forget: sendTyping can hang on archived threads / rate-limit queues.
+      // The typingInterval below re-issues it every 8s anyway.
+      thread.sendTyping().catch(() => {});
 
-      // Emit user message for visualization
-      this.emitMessage(threadId, 'user', userMessage);
+      // Emit user message for visualization (include file info if present)
+      const fileCount = images.length + pendingImages.length;
+      const displayMessage = fileCount > 0
+        ? `${userMessage} [+${fileCount} file(s)]`
+        : userMessage;
+      this.emitMessage(threadId, 'user', displayMessage);
 
       const abortController = session?.abortController ?? new AbortController();
 
@@ -373,7 +429,7 @@ export class SessionManager {
         // Create content blocks with images and text
         const contentBlocks: Array<
           | { type: "text"; text: string }
-          | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
+          | { type: "image"; source: { type: "base64"; media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; data: string } }
         > = [];
 
         // Add images first
@@ -382,7 +438,7 @@ export class SessionManager {
             type: "image",
             source: {
               type: "base64",
-              media_type: img.mediaType,
+              media_type: img.mediaType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
               data: img.data,
             },
           });
@@ -520,6 +576,7 @@ export class SessionManager {
           allowedTools: ['mcp__subsession__*'],
           ...(mcpServersConfig ? { mcpServers: mcpServersConfig } : {}),
           ...(session?.sessionId ? { resume: session.sessionId } : {}),
+          ...(session?.model || this.pendingModels.get(threadId) ? { model: session?.model ?? this.pendingModels.get(threadId) } : {}),
         },
       });
 
@@ -553,6 +610,12 @@ export class SessionManager {
               });
             } else {
               // 메인 세션인 경우: 새 세션 생성
+              // Apply pending model if set before session creation
+              const pendingModel = this.pendingModels.get(threadId);
+              if (pendingModel) {
+                this.pendingModels.delete(threadId);
+              }
+
               const sessionInfo: MainSessionInfo = {
                 sessionId: message.session_id,
                 threadId,
@@ -564,6 +627,7 @@ export class SessionManager {
                 lastActivityAt: Date.now(),
                 isProcessing: true,
                 mode: "action",
+                model: pendingModel,
                 pendingImages: pendingImages.length > 0 ? pendingImages : undefined,
                 messageQueue: [],
                 // Main session specific fields
@@ -573,6 +637,14 @@ export class SessionManager {
               };
               this.sessions.set(threadId, sessionInfo);
               session = sessionInfo;
+
+              // Save thread info to DB
+              try {
+                const messageStore = getMessageStore();
+                messageStore.upsertThread(threadId, channelId, thread.name);
+              } catch (err) {
+                console.error('[SessionManager] Failed to save thread info to DB:', err);
+              }
 
               // 메인 세션용 MCP 서버 설정 (parent 도구들)
               response.setMcpServers({
@@ -596,6 +668,17 @@ export class SessionManager {
           }
 
           if (message.type === "assistant") {
+            // Update reaction based on what kind of work the model is doing
+            const blocks = (message as any).message?.content;
+            if (Array.isArray(blocks)) {
+              const hasToolUse = blocks.some((b: any) => b?.type === "tool_use");
+              const hasText = blocks.some((b: any) => b?.type === "text" && b.text?.trim());
+              if (hasToolUse) {
+                this.setReaction(userDiscordMessage, "🔍");
+              } else if (hasText) {
+                this.setReaction(userDiscordMessage, "💭");
+              }
+            }
             const text = formatAssistantMessage(message);
             if (text && text !== lastTextMessage) {
               lastTextMessage = text;
@@ -637,10 +720,17 @@ export class SessionManager {
             if (session) {
               session.totalCostUsd = message.total_cost_usd;
             }
+
+            // Emit result message with cost for visualization
+            this.emitMessage(threadId, 'system', resultText, message.total_cost_usd);
+
             await thread.send({
               content: resultText,
               components: [createModeSelect(session?.mode ?? "action"), createEndSessionButton()],
             });
+
+            const isError = (message as any).subtype && (message as any).subtype !== "success";
+            this.setReaction(userDiscordMessage, isError ? "❌" : "✅");
 
             // Task completed successfully, process next queued message
             if (session && session.messageQueue.length > 0) {
@@ -661,6 +751,7 @@ export class SessionManager {
         const truncatedErr = errMsg.length > 1900 ? errMsg.slice(0, 1900) + "..." : errMsg;
         await thread.send(`*Session error: ${truncatedErr}*`).catch(() => {});
       }
+      this.setReaction(userDiscordMessage, "❌");
     } finally {
       if (session) {
         session.isProcessing = false;
@@ -703,6 +794,7 @@ export class SessionManager {
       nextMessage.images,
       nextMessage.pendingImages,
       nextMessage.audioTranscriptions ?? [],
+      nextMessage.userDiscordMessage,
     ).catch((err) => {
       console.error(`Failed to process queued message for thread ${threadId}:`, err);
     });
@@ -1398,9 +1490,25 @@ ${description}
   }
 
   /**
-   * Emit a message event to all registered callbacks.
+   * Emit a message event to all registered callbacks and save to DB.
    */
   private emitMessage(threadId: string, role: 'user' | 'assistant' | 'system', content: string, cost?: number): void {
+    // Save to local DB
+    try {
+      const messageStore = getMessageStore();
+      messageStore.addMessage({
+        id: `${threadId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        threadId,
+        timestamp: Date.now(),
+        role,
+        content,
+        cost,
+      });
+    } catch (err) {
+      console.error('[SessionManager] Failed to save message to DB:', err);
+    }
+
+    // Notify callbacks
     for (const callback of this.messageCallbacks) {
       try {
         callback(threadId, role, content, cost);

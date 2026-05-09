@@ -1,11 +1,14 @@
 import { ChannelType, type Message, type Attachment } from "discord.js";
 import { exec } from "child_process";
+import sharp from "sharp";
 import type { AppConfig, ImageContent, PendingImage, AudioTranscription } from "../../types.js";
 import { getConfig } from "../../config.js";
 import type { SessionManager } from "../../claude/sessionManager.js";
 import { isAudioFile, transcribeAudio } from "../../utils/audioTranscriber.js";
 
 const SUPPORTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB limit for Claude API
+const MAX_IMAGE_DIMENSION = 1568; // Claude API max dimension limit
 
 async function fetchImageAsBase64(url: string): Promise<{ data: string; mediaType: string } | null> {
   try {
@@ -13,16 +16,96 @@ async function fetchImageAsBase64(url: string): Promise<{ data: string; mediaTyp
     if (!response.ok) return null;
 
     const contentType = response.headers.get("content-type") || "";
-    const mediaType = contentType.split(";")[0].trim();
+    let mediaType = contentType.split(";")[0].trim();
 
     if (!SUPPORTED_IMAGE_TYPES.includes(mediaType)) return null;
 
-    const buffer = await response.arrayBuffer();
-    const data = Buffer.from(buffer).toString("base64");
+    const buffer = Buffer.from(await response.arrayBuffer());
 
-    return { data, mediaType };
-  } catch {
+    // Resize image if needed
+    const resized = await resizeImageIfNeeded(buffer, mediaType);
+
+    return { data: resized.data, mediaType: resized.mediaType };
+  } catch (err) {
+    console.error("[Image] Error fetching/processing image:", err);
     return null;
+  }
+}
+
+async function resizeImageIfNeeded(
+  buffer: Buffer,
+  mediaType: string
+): Promise<{ data: string; mediaType: string }> {
+  try {
+    const image = sharp(buffer);
+    const metadata = await image.metadata();
+
+    const width = metadata.width || 0;
+    const height = metadata.height || 0;
+
+    // Check if resize is needed
+    if (width <= MAX_IMAGE_DIMENSION && height <= MAX_IMAGE_DIMENSION) {
+      // No resize needed, return original
+      return { data: buffer.toString("base64"), mediaType };
+    }
+
+    console.log(`[Image] Resizing image from ${width}x${height} to fit within ${MAX_IMAGE_DIMENSION}px`);
+
+    // Calculate new dimensions maintaining aspect ratio
+    let newWidth: number;
+    let newHeight: number;
+
+    if (width > height) {
+      newWidth = MAX_IMAGE_DIMENSION;
+      newHeight = Math.round((height / width) * MAX_IMAGE_DIMENSION);
+    } else {
+      newHeight = MAX_IMAGE_DIMENSION;
+      newWidth = Math.round((width / height) * MAX_IMAGE_DIMENSION);
+    }
+
+    // Resize and convert to appropriate format
+    let resizedBuffer: Buffer;
+    let outputMediaType = mediaType;
+
+    if (mediaType === "image/png") {
+      resizedBuffer = await image
+        .resize(newWidth, newHeight, { fit: "inside", withoutEnlargement: true })
+        .png({ quality: 90, compressionLevel: 9 })
+        .toBuffer();
+    } else if (mediaType === "image/gif") {
+      // For GIF, convert to PNG to avoid animation issues
+      resizedBuffer = await image
+        .resize(newWidth, newHeight, { fit: "inside", withoutEnlargement: true })
+        .png()
+        .toBuffer();
+      outputMediaType = "image/png";
+    } else {
+      // JPEG and WebP
+      resizedBuffer = await image
+        .resize(newWidth, newHeight, { fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 85 })
+        .toBuffer();
+      outputMediaType = "image/jpeg";
+    }
+
+    console.log(`[Image] Resized to ${newWidth}x${newHeight}, size: ${(resizedBuffer.length / 1024).toFixed(1)}KB`);
+
+    // Check if still too large after resize
+    if (resizedBuffer.length > MAX_IMAGE_SIZE_BYTES) {
+      console.log(`[Image] Still too large after resize: ${(resizedBuffer.length / 1024 / 1024).toFixed(2)}MB, trying JPEG compression`);
+      // Try more aggressive JPEG compression
+      resizedBuffer = await sharp(resizedBuffer)
+        .jpeg({ quality: 70 })
+        .toBuffer();
+      outputMediaType = "image/jpeg";
+      console.log(`[Image] After JPEG compression: ${(resizedBuffer.length / 1024).toFixed(1)}KB`);
+    }
+
+    return { data: resizedBuffer.toString("base64"), mediaType: outputMediaType };
+  } catch (err) {
+    console.error("[Image] Resize error, using original:", err);
+    // Fallback to original if resize fails
+    return { data: buffer.toString("base64"), mediaType };
   }
 }
 
@@ -62,6 +145,9 @@ async function extractMedia(message: Message): Promise<ExtractedMedia> {
 
     // Check for image files
     if (SUPPORTED_IMAGE_TYPES.includes(contentType)) {
+      // Always try to process - we'll resize large images
+      console.log(`[Image] Processing image: ${filename} (${(attachment.size / 1024 / 1024).toFixed(2)}MB)`);
+
       const result = await fetchImageAsBase64(attachment.url);
       if (result) {
         images.push({ type: "image", data: result.data, mediaType: result.mediaType });
@@ -199,6 +285,7 @@ export function handleMessageCreate(_config: AppConfig, sessionManager: SessionM
       images,
       pendingImages,
       audioTranscriptions,
+      message,
     );
   };
 }
