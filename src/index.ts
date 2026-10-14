@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./env.js";
 import { loadConfig, getConfig, destroyConfigManager } from "./config.js";
 import { createDiscordClient } from "./discord/client.js";
 import {
@@ -46,7 +46,12 @@ let visualizationServer: VisualizationServer | null = null;
 // CLAUDE_CODE_OAUTH_TOKEN 으로 cli.js 에 주입한다. → cli.js 는 공유 파일
 // ~/.claude/.credentials.json 을 건드리지 않으므로 인터랙티브 세션과의 회전 충돌 0.
 // 시드(공유 파일 복사)에 실패한 경우에만 기존 공유 파일 선제 갱신으로 폴백한다.
-if (startBotTokenManager()) {
+// (0) ANTHROPIC_API_KEY 가 설정된 경우 — API 키 과금 모드.
+//     OAuth 토큰 관리를 전부 끄고, cli.js 가 API 키만 쓰도록 OAuth env 를 제거한다.
+if (process.env.ANTHROPIC_API_KEY) {
+  delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  console.log("[auth] ANTHROPIC_API_KEY mode — OAuth token management disabled.");
+} else if (startBotTokenManager()) {
   console.log("[auth] Bot-isolated token auth active (shared credential file untouched).");
 } else {
   console.warn("[auth] Bot token seed failed — falling back to shared-file proactive refresh.");

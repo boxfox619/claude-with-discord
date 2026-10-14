@@ -36,6 +36,7 @@ const CREDENTIALS_PATH = join(CLAUDE_DIR, ".credentials.json");
  * Checks credentials file directly for token validity.
  */
 export function isAuthenticated(): boolean {
+  if (process.env.ANTHROPIC_API_KEY) return true;
   try {
     if (existsSync(CREDENTIALS_PATH)) {
       const creds = JSON.parse(readFileSync(CREDENTIALS_PATH, "utf-8"));

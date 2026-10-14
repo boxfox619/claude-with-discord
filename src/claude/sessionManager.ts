@@ -583,6 +583,7 @@ export class SessionManager {
           canUseTool,
           allowedTools: ['mcp__subsession__*'],
           ...(mcpServersConfig ? { mcpServers: mcpServersConfig } : {}),
+          ...(process.env.CLAUDE_CODE_PATH ? { pathToClaudeCodeExecutable: process.env.CLAUDE_CODE_PATH } : {}),
           ...(session?.sessionId ? { resume: session.sessionId } : {}),
           ...(session?.model || this.pendingModels.get(threadId) ? { model: session?.model ?? this.pendingModels.get(threadId) } : {}),
         },
@@ -755,7 +756,7 @@ export class SessionManager {
       // collision). Refresh the bot-private token and retry this message ONCE
       // so the user never sees the error. The refresh updates the env token
       // that the next spawned cli.js inherits.
-      if (isAuth401 && !authRetried && !errMsg.includes("aborted")) {
+      if (isAuth401 && !authRetried && !errMsg.includes("aborted") && !process.env.ANTHROPIC_API_KEY) {
         console.warn(`[SessionManager] 401 on thread ${threadId} — refreshing bot token and retrying once...`);
         if (session) { session.isProcessing = false; session.query = null; }
         const refreshed = await refreshBotToken().catch(() => false);
@@ -1185,7 +1186,8 @@ export class SessionManager {
               permissionMode: "default",
               maxTurns: 1,
               maxBudgetUsd: 0.05,
-                            resume: session.sessionId,
+              resume: session.sessionId,
+              ...(process.env.CLAUDE_CODE_PATH ? { pathToClaudeCodeExecutable: process.env.CLAUDE_CODE_PATH } : {}),
             },
           });
 

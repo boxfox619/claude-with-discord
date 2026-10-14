@@ -30,3 +30,6 @@ Thumbs.db
 
 # Build artifacts
 *.tsbuildinfo
+
+# Runtime data
+data/
