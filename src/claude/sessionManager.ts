@@ -576,7 +576,7 @@ export class SessionManager {
           cwd: projectPath,
           permissionMode: this.config.permission_mode,
           systemPrompt: systemPromptConfig,
-          settingSources: ["project"],
+          settingSources: ["user", "project"],
           maxTurns: this.config.max_turns,
           maxBudgetUsd: this.config.max_budget_usd,
           abortController,
