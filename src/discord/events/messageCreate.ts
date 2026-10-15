@@ -261,9 +261,9 @@ export function handleMessageCreate(_config: AppConfig, sessionManager: SessionM
       return;
     }
 
-    // Handle deploy/restart commands (only for claude-with-discord project)
+    // Handle deploy/restart commands for this bot
     const reloadCommands = ["!reload", "!restart", "!deploy", "재시작", "리로드"];
-    if (reloadCommands.includes(content.toLowerCase()) && projectPath.includes("claude-with-discord")) {
+    if (reloadCommands.includes(content.toLowerCase())) {
       await message.reply("🔄 Deploying...");
       exec("/Volumes/T7/projects/claude-with-discord/scripts/deploy.sh", (error, stdout, stderr) => {
         if (error) {

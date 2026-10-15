@@ -3,7 +3,7 @@ import { fetchUsageInfo, formatUsageEmbed } from "./usageService.js";
 import { createSessionButtons } from "../discord/components/closeAllSessionsButton.js";
 import type { SessionManager } from "../claude/sessionManager.js";
 
-// Channel ID for claude-with-discord project
+// Channel ID for the main #mac-pro-claude channel
 const CLAUDE_CODE_CHANNEL_ID = "1472468552916275342";
 const UPDATE_INTERVAL_MS = 60_000; // 1 minute
 
