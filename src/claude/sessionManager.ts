@@ -647,6 +647,11 @@ export class SessionManager {
               this.sessions.set(threadId, sessionInfo);
               session = sessionInfo;
 
+              // 로컬 터미널에서 같은 세션을 이어갈 수 있도록 resume 명령 안내
+              thread
+                .send(`-# 로컬에서 이어하기: \`cd ${projectPath} && claude --resume ${message.session_id}\``)
+                .catch((err) => console.error(`Failed to send resume hint for ${threadId}:`, err));
+
               // Save thread info to DB
               try {
                 const messageStore = getMessageStore();
