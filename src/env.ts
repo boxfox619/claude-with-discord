@@ -9,4 +9,5 @@ for (const key of Object.keys(process.env)) {
   }
 }
 delete process.env.ANTHROPIC_API_KEY;
+delete process.env.ANTHROPIC_API_KEYS;
 config({ override: true });

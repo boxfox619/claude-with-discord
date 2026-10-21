@@ -8,7 +8,7 @@ import {
 } from "./errorNotifier.js";
 import { VisualizationServer } from "./web/server.js";
 import { closeMessageStore } from "./db/messageStore.js";
-import { startTokenAutoRefresh, stopTokenAutoRefresh, startBotTokenManager, stopBotTokenManager } from "./services/claudeAuth.js";
+import { loadApiKeys, startTokenAutoRefresh, stopTokenAutoRefresh, startBotTokenManager, stopBotTokenManager } from "./services/claudeAuth.js";
 
 // Setup global error handlers early (before Discord client is ready)
 setupGlobalErrorHandlers();
@@ -48,9 +48,10 @@ let visualizationServer: VisualizationServer | null = null;
 // 시드(공유 파일 복사)에 실패한 경우에만 기존 공유 파일 선제 갱신으로 폴백한다.
 // (0) ANTHROPIC_API_KEY 가 설정된 경우 — API 키 과금 모드.
 //     OAuth 토큰 관리를 전부 끄고, cli.js 가 API 키만 쓰도록 OAuth env 를 제거한다.
-if (process.env.ANTHROPIC_API_KEY) {
+const apiKeys = loadApiKeys();
+if (apiKeys.length > 0) {
   delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  console.log("[auth] ANTHROPIC_API_KEY mode — OAuth token management disabled.");
+  console.log(`[auth] ANTHROPIC_API_KEY mode (${apiKeys.length} key(s), falls back in order) — OAuth token management disabled.`);
 } else if (startBotTokenManager()) {
   console.log("[auth] Bot-isolated token auth active (shared credential file untouched).");
 } else {

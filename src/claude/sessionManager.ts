@@ -30,7 +30,10 @@ import { createPermissionButtons, formatPermissionRequest, isAskUserQuestion } f
 import { createQuestionComponents, formatQuestionMessage, type Question } from "../discord/components/questionButtons.js";
 import { saveDiscordImage, formatPendingImagesList } from "../utils/imageSaver.js";
 import { generateAudio, extractTextForTTS } from "../utils/audioGenerator.js";
-import { isAuthenticated, refreshToken, refreshBotToken, startLogin, type LoginSession } from "../services/claudeAuth.js";
+import { apiKeyCount, apiKeyEnv, isApiKeyProblem, isApiKeyProblemText, isAuthenticated, markApiKeyOk, markApiKeyResting, pickApiKey, refreshToken, refreshBotToken, startLogin, type LoginSession } from "../services/claudeAuth.js";
+
+// API 키 한도 문제로 다음 키로 넘어갈 때 같은 세션을 이어서 처리하게 하는 프롬프트
+const KEY_SWITCH_CONTINUE_PROMPT = "[System] The previous request was interrupted by an API key limit and has been reconnected with another key. Continue handling the user's last request from where it stopped. Do not mention this notice.";
 
 export type MessageCallback = (threadId: string, role: 'user' | 'assistant' | 'system', content: string, cost?: number) => void;
 
@@ -279,6 +282,7 @@ export class SessionManager {
     audioTranscriptions: AudioTranscription[] = [],
     userDiscordMessage?: Message,
     authRetried = false,
+    keyRetries = 0,
   ): Promise<void> {
     let session = this.sessions.get(threadId);
 
@@ -368,6 +372,29 @@ export class SessionManager {
       session.lastActivityAt = Date.now();
     }
     this.setReaction(userDiscordMessage, "🤔");
+
+    // 재시도(키 전환·401)로 다음 sendMessage 에 넘겼으면 그쪽이 대기열을 처리한다
+    let handedOff = false;
+
+    // API 키 모드면 쉬는 중이 아닌 첫 키로 실행한다. 키가 한도·크레딧·인증 문제를 내면
+    // 그 키를 쉬게 하고 다음 키로 같은 세션을 이어간다 (switchApiKey).
+    const apiKey = pickApiKey();
+    let keyProblem: { status?: number; detail: string } | null = null;
+    const switchApiKey = async (): Promise<boolean> => {
+      if (!apiKey || !keyProblem) return false;
+      const canSwitch = markApiKeyResting(apiKey, keyProblem.status, keyProblem.detail);
+      const current = this.sessions.get(threadId);
+      if (!canSwitch || keyRetries >= apiKeyCount() - 1 || !current?.sessionId) return false;
+      await thread.send(`-# API 키 …${apiKey.slice(-6)} 한도 문제로 다른 키로 전환해 이어서 진행합니다.`).catch(() => {});
+      current.isProcessing = false;
+      current.query = null;
+      handedOff = true;
+      await this.sendMessage(
+        threadId, channelId, projectPath, KEY_SWITCH_CONTINUE_PROMPT, thread,
+        [], [], [], userDiscordMessage, authRetried, keyRetries + 1,
+      );
+      return true;
+    };
 
     try {
       // Fire-and-forget: sendTyping can hang on archived threads / rate-limit queues.
@@ -583,6 +610,7 @@ export class SessionManager {
           canUseTool,
           allowedTools: ['mcp__subsession__*'],
           ...(mcpServersConfig ? { mcpServers: mcpServersConfig } : {}),
+          ...(apiKey ? { env: apiKeyEnv(apiKey) } : {}),
           ...(process.env.CLAUDE_CODE_PATH ? { pathToClaudeCodeExecutable: process.env.CLAUDE_CODE_PATH } : {}),
           ...(session?.sessionId ? { resume: session.sessionId } : {}),
           ...(session?.model || this.pendingModels.get(threadId) ? { model: session?.model ?? this.pendingModels.get(threadId) } : {}),
@@ -682,6 +710,12 @@ export class SessionManager {
           }
 
           if (message.type === "assistant") {
+            // 키 한도·크레딧·인증 오류면 Discord 에 보내지 않고 다음 키로 넘길 준비만 한다
+            const apiErrorKind = (message as any).error as string | undefined;
+            if (apiKey && apiErrorKind && isApiKeyProblem(apiErrorKind)) {
+              keyProblem = { detail: formatAssistantMessage(message) || apiErrorKind };
+              continue;
+            }
             // Update reaction based on what kind of work the model is doing
             const blocks = (message as any).message?.content;
             if (Array.isArray(blocks)) {
@@ -730,6 +764,12 @@ export class SessionManager {
           }
 
           if (message.type === "result") {
+            const r = message as any;
+            if (apiKey && (keyProblem || (r.is_error && isApiKeyProblem(undefined, r.api_error_status, String(r.result ?? ""))))) {
+              keyProblem = { status: r.api_error_status, detail: keyProblem?.detail || String(r.result ?? "") };
+              continue;
+            }
+            if (apiKey) markApiKeyOk(apiKey);
             const resultText = formatResultMessage(message);
             if (session) {
               session.totalCostUsd = message.total_cost_usd;
@@ -753,8 +793,21 @@ export class SessionManager {
       } finally {
         clearInterval(typingInterval);
       }
+
+      // 키 문제로 끝났으면 다음 키로 이어간다. 넘어갈 키가 없으면 원래 오류를 보여준다
+      if (keyProblem) {
+        if (await switchApiKey()) return;
+        await thread.send(`*Claude API error: ${keyProblem.detail.slice(0, 1800)}*`).catch(() => {});
+        this.setReaction(userDiscordMessage, "❌");
+      }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
+
+      // SDK 는 오류 결과 뒤에 "Claude Code returned an error result: ..." 를 던진다 — 키 문제면 다음 키로
+      if (apiKey && !errMsg.includes("aborted") && (keyProblem || isApiKeyProblemText(errMsg))) {
+        keyProblem ??= { detail: errMsg };
+        if (await switchApiKey()) return;
+      }
       const isAuth401 = errMsg.includes("401") || errMsg.includes("authentication_error") || errMsg.includes("Invalid authentication credentials");
 
       // Auth 401 safety net: a spawned cli.js token went stale (rare lineage
@@ -766,6 +819,7 @@ export class SessionManager {
         if (session) { session.isProcessing = false; session.query = null; }
         const refreshed = await refreshBotToken().catch(() => false);
         if (refreshed) {
+          handedOff = true;
           await this.sendMessage(
             threadId, channelId, projectPath, userMessage, thread,
             images, pendingImages, audioTranscriptions, userDiscordMessage, true,
@@ -782,7 +836,7 @@ export class SessionManager {
       }
       this.setReaction(userDiscordMessage, "❌");
     } finally {
-      if (session) {
+      if (session && !handedOff) {
         session.isProcessing = false;
         session.query = null;
 

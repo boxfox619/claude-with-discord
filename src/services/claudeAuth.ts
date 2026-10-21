@@ -31,6 +31,68 @@ const CONFIG_PATH = resolve(homedir(), ".claude.json");
 const CLAUDE_DIR = resolve(homedir(), ".claude");
 const CREDENTIALS_PATH = join(CLAUDE_DIR, ".credentials.json");
 
+// ---------- API 키 풀 (2026-10-21) ----------
+// .env ANTHROPIC_API_KEYS=새키,기존키 (쉼표 구분, 앞이 우선). 없으면 ANTHROPIC_API_KEY 하나.
+// 앞 키가 한도 소진·크레딧 부족·인증 오류를 내면 그 키를 잠시 쉬게 하고 다음 키로 이어서 처리한다.
+// 쉬는 시간이 끝나면 다시 앞 키부터 쓴다 — 새 키가 충전되면 저절로 돌아온다.
+const KEY_REST_MS = 60 * 60_000;
+const RATE_LIMIT_REST_MS = 15 * 60_000;
+const KEY_ERRORS = new Set(["authentication_failed", "billing_error", "rate_limit"]);
+const QUOTA_TEXT = /credit balance|billing|usage limit|spend limit|quota|regain access|rate limit/i;
+let apiKeys: string[] = [];
+const keyRestUntil = new Map<string, number>();
+
+/** .env 에서 키 목록을 읽는다. 첫 키를 ANTHROPIC_API_KEY 로도 둬서 기존 동작(isAuthenticated 등)을 유지한다. */
+export function loadApiKeys(): string[] {
+  const raw = process.env.ANTHROPIC_API_KEYS || process.env.ANTHROPIC_API_KEY || "";
+  apiKeys = [...new Set(raw.split(/[\s,]+/).map((k) => k.trim().replace(/^["']|["']$/g, "")).filter(Boolean))];
+  delete process.env.ANTHROPIC_API_KEYS;
+  if (apiKeys.length > 0) process.env.ANTHROPIC_API_KEY = apiKeys[0];
+  return apiKeys;
+}
+
+export function apiKeyCount(): number {
+  return apiKeys.length;
+}
+
+/** 쉬는 중이 아닌 첫 키. 전부 쉬는 중이면 가장 빨리 풀리는 키. */
+export function pickApiKey(): string | null {
+  if (apiKeys.length === 0) return null;
+  const now = Date.now();
+  const ready = apiKeys.find((k) => (keyRestUntil.get(k) ?? 0) <= now);
+  if (ready) return ready;
+  return [...apiKeys].sort((a, b) => keyRestUntil.get(a)! - keyRestUntil.get(b)!)[0];
+}
+
+export function apiKeyEnv(key: string): Record<string, string | undefined> {
+  return { ...process.env, ANTHROPIC_API_KEY: key };
+}
+
+/** 이 오류가 키 자체 문제(한도·크레딧·인증)인가. 요청 내용 오류나 서버 과부하는 아니다. */
+export function isApiKeyProblem(errorKind?: string, status?: number, text?: string): boolean {
+  if (errorKind && KEY_ERRORS.has(errorKind)) return true;
+  if (status !== undefined && [401, 402, 403, 429].includes(status)) return true;
+  return status === 400 && QUOTA_TEXT.test(text ?? "");
+}
+
+/** SDK 가 던진 오류 문구로 키 문제를 판별한다 ("Claude Code returned an error result: ..."). */
+export function isApiKeyProblemText(text: string): boolean {
+  return /Invalid API key|credit balance|billing|usage limit|spend limit|quota|regain access|rate limit|API Error: (401|402|403|429)/i.test(text);
+}
+
+/** 키를 쉬게 한다. 다른 키로 넘어갈 수 있으면 true. */
+export function markApiKeyResting(key: string, status?: number, detail = ""): boolean {
+  const ms = status === 429 || /rate limit/i.test(detail) ? RATE_LIMIT_REST_MS : KEY_REST_MS;
+  keyRestUntil.set(key, Date.now() + ms);
+  const next = pickApiKey();
+  console.warn(`[auth] API key …${key.slice(-6)} ${status ?? ""} (${detail.slice(0, 120)}) — resting ${Math.round(ms / 60_000)}m${next && next !== key ? `, switching to …${next.slice(-6)}` : ", no other key"}`);
+  return next !== null && next !== key;
+}
+
+export function markApiKeyOk(key: string): void {
+  if (keyRestUntil.delete(key)) console.log(`[auth] API key …${key.slice(-6)} usable again`);
+}
+
 /**
  * Check if Claude Code is authenticated.
  * Checks credentials file directly for token validity.
