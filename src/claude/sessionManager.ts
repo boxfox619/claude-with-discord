@@ -30,7 +30,7 @@ import { createPermissionButtons, formatPermissionRequest, isAskUserQuestion } f
 import { createQuestionComponents, formatQuestionMessage, type Question } from "../discord/components/questionButtons.js";
 import { saveDiscordImage, formatPendingImagesList } from "../utils/imageSaver.js";
 import { generateAudio, extractTextForTTS } from "../utils/audioGenerator.js";
-import { apiKeyCount, apiKeyEnv, isApiKeyProblem, isApiKeyProblemText, isAuthenticated, markApiKeyOk, markApiKeyResting, pickApiKey, refreshToken, refreshBotToken, startLogin, type LoginSession } from "../services/claudeAuth.js";
+import { apiKeyCount, credentialEnv, isApiKeyProblem, isApiKeyProblemText, isAuthenticated, markApiKeyOk, markApiKeyResting, pickCredential, refreshToken, refreshBotToken, startLogin, type LoginSession } from "../services/claudeAuth.js";
 
 // API 키 한도 문제로 다음 키로 넘어갈 때 같은 세션을 이어서 처리하게 하는 프롬프트
 const KEY_SWITCH_CONTINUE_PROMPT = "[System] The previous request was interrupted by an API key limit and has been reconnected with another key. Continue handling the user's last request from where it stopped. Do not mention this notice.";
@@ -378,14 +378,20 @@ export class SessionManager {
 
     // API 키 모드면 쉬는 중이 아닌 첫 키로 실행한다. 키가 한도·크레딧·인증 문제를 내면
     // 그 키를 쉬게 하고 다음 키로 같은 세션을 이어간다 (switchApiKey).
-    const apiKey = pickApiKey();
+    // 쓸 수 있는 키가 없으면 이 기기에 로그인된 Claude Code 구독으로 실행한다.
+    const credential = pickCredential();
+    const apiKey = credential?.kind === "apiKey" ? credential.key : null;
     let keyProblem: { status?: number; detail: string } | null = null;
     const switchApiKey = async (): Promise<boolean> => {
       if (!apiKey || !keyProblem) return false;
       const canSwitch = markApiKeyResting(apiKey, keyProblem.status, keyProblem.detail);
       const current = this.sessions.get(threadId);
-      if (!canSwitch || keyRetries >= apiKeyCount() - 1 || !current?.sessionId) return false;
-      await thread.send(`-# API 키 …${apiKey.slice(-6)} 한도 문제로 다른 키로 전환해 이어서 진행합니다.`).catch(() => {});
+      // 키 개수만큼 + 구독 로그인 한 번까지 이어갈 수 있다
+      if (!canSwitch || keyRetries >= apiKeyCount() || !current?.sessionId) return false;
+      const next = pickCredential();
+      await thread.send(next?.kind === "subscription"
+        ? `-# API 키 잔액이 없어 이 기기에 로그인된 Claude Code 구독으로 이어서 진행합니다.`
+        : `-# API 키 …${apiKey.slice(-6)} 한도 문제로 다른 키로 전환해 이어서 진행합니다.`).catch(() => {});
       current.isProcessing = false;
       current.query = null;
       handedOff = true;
@@ -610,7 +616,7 @@ export class SessionManager {
           canUseTool,
           allowedTools: ['mcp__subsession__*'],
           ...(mcpServersConfig ? { mcpServers: mcpServersConfig } : {}),
-          ...(apiKey ? { env: apiKeyEnv(apiKey) } : {}),
+          ...(credential ? { env: credentialEnv(credential) } : {}),
           ...(process.env.CLAUDE_CODE_PATH ? { pathToClaudeCodeExecutable: process.env.CLAUDE_CODE_PATH } : {}),
           ...(session?.sessionId ? { resume: session.sessionId } : {}),
           ...(session?.model || this.pendingModels.get(threadId) ? { model: session?.model ?? this.pendingModels.get(threadId) } : {}),
@@ -1246,6 +1252,7 @@ export class SessionManager {
               maxTurns: 1,
               maxBudgetUsd: 0.05,
               resume: session.sessionId,
+              ...(pickCredential() ? { env: credentialEnv(pickCredential()) } : {}),
               ...(process.env.CLAUDE_CODE_PATH ? { pathToClaudeCodeExecutable: process.env.CLAUDE_CODE_PATH } : {}),
             },
           });

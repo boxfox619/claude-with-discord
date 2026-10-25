@@ -55,17 +55,133 @@ export function apiKeyCount(): number {
   return apiKeys.length;
 }
 
-/** 쉬는 중이 아닌 첫 키. 전부 쉬는 중이면 가장 빨리 풀리는 키. */
-export function pickApiKey(): string | null {
+// ---------- 키를 다 쓰면 이 기기에 로그인된 Claude Code 구독으로 (2026-10-26) ----------
+// 쓸 수 있는 키가 하나도 없고 CLI 가 구독으로 로그인돼 있으면 키 없이 실행한다. CLI 가 자기 로그인을
+// 쓰고 갱신도 직접 한다 — 터미널에서 여는 Claude Code 세션 하나가 더 붙는 것과 같다.
+// 쉬는 키는 시간이 지나도 바로 쓰지 않는다. 1토큰 요청으로 잔액을 확인하고 통과해야 다시 쓴다
+// (안 그러면 충전 안 된 키로 대화를 시작했다가 실패하고 전환하는 일이 한 시간마다 생긴다).
+export type Credential = { kind: "apiKey"; key: string } | { kind: "subscription" };
+
+const PROBE_MODEL = "claude-haiku-4-5";
+const MONITOR_INTERVAL_MS = 10 * 60_000;
+let subscriptionReady = false;
+let monitorTimer: ReturnType<typeof setInterval> | null = null;
+
+function readyKeys(): string[] {
+  return apiKeys.filter((k) => !keyRestUntil.has(k));
+}
+
+/** 쓸 인증 수단. 쉬지 않는 키 → (전부 막혔으면) 구독 로그인 → (그것도 없으면) 가장 빨리 풀리는 키. */
+export function pickCredential(): Credential | null {
   if (apiKeys.length === 0) return null;
-  const now = Date.now();
-  const ready = apiKeys.find((k) => (keyRestUntil.get(k) ?? 0) <= now);
-  if (ready) return ready;
-  return [...apiKeys].sort((a, b) => keyRestUntil.get(a)! - keyRestUntil.get(b)!)[0];
+  const ready = readyKeys()[0];
+  if (ready) return { kind: "apiKey", key: ready };
+  if (subscriptionReady) return { kind: "subscription" };
+  return { kind: "apiKey", key: [...apiKeys].sort((a, b) => keyRestUntil.get(a)! - keyRestUntil.get(b)!)[0] };
 }
 
 export function apiKeyEnv(key: string): Record<string, string | undefined> {
-  return { ...process.env, ANTHROPIC_API_KEY: key };
+  const env: Record<string, string | undefined> = { ...process.env, ANTHROPIC_API_KEY: key };
+  delete env.CLAUDE_CODE_OAUTH_TOKEN;
+  return env;
+}
+
+/** 구독 로그인으로 실행할 env — 키·토큰·프록시 주소를 빼서 CLI 가 자기 로그인을 쓰게 한다. */
+function subscriptionEnv(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env };
+  for (const k of ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEYS", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"]) delete env[k];
+  return env;
+}
+
+export function credentialEnv(c: Credential | null): Record<string, string | undefined> | undefined {
+  if (!c) return undefined;
+  return c.kind === "apiKey" ? apiKeyEnv(c.key) : subscriptionEnv();
+}
+
+export function credentialLabel(c: Credential | null): string {
+  if (!c) return "none";
+  return c.kind === "apiKey" ? `API key …${c.key.slice(-6)}` : "Claude Code subscription login";
+}
+
+/** 키 하나를 1토큰 요청으로 확인한다. 비용은 사실상 0. */
+export async function probeApiKey(key: string): Promise<"ok" | "depleted" | "rate_limited" | "unknown"> {
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: PROBE_MODEL, max_tokens: 1, messages: [{ role: "user", content: "." }] }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (res.ok) return "ok";
+    const text = await res.text().catch(() => "");
+    if (res.status === 429) return "rate_limited";
+    if (isApiKeyProblem(undefined, res.status, text)) return "depleted";
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/** CLI 가 이 기기에서 구독(claude.ai)으로 로그인돼 있는가. 키 env 를 뺀 채로 `claude auth status` 를 본다. */
+export async function checkSubscriptionLogin(): Promise<boolean> {
+  const bin = process.env.CLAUDE_CODE_PATH;
+  if (!bin) {
+    subscriptionReady = false;
+    return false;
+  }
+  const { execFile } = await import("node:child_process");
+  const out = await new Promise<string>((resolveOut) => {
+    execFile(bin, ["auth", "status"], { env: subscriptionEnv() as NodeJS.ProcessEnv, timeout: 20_000 }, (_err, stdout) => resolveOut(String(stdout ?? "")));
+  });
+  let ok = false;
+  try {
+    const s = JSON.parse(out);
+    ok = s.loggedIn === true && s.authMethod === "claude.ai";
+    if (ok !== subscriptionReady) console.log(`[auth] Subscription login ${ok ? `available (${s.email ?? "?"}, ${s.subscriptionType ?? "?"})` : "NOT available"}`);
+  } catch {
+    if (subscriptionReady) console.warn("[auth] Subscription login check failed — treating as unavailable");
+  }
+  subscriptionReady = ok;
+  return ok;
+}
+
+async function probeAndRest(key: string): Promise<void> {
+  const r = await probeApiKey(key);
+  if (r === "ok") {
+    markApiKeyOk(key);
+  } else if (r === "depleted") {
+    keyRestUntil.set(key, Date.now() + KEY_REST_MS);
+  } else if (r === "rate_limited") {
+    keyRestUntil.set(key, Date.now() + RATE_LIMIT_REST_MS);
+  } else if (!keyRestUntil.has(key)) {
+    // 네트워크 문제 등 판단 불가 — 쉬던 키가 아니면 그대로 둔다
+  } else {
+    keyRestUntil.set(key, Date.now() + RATE_LIMIT_REST_MS);
+  }
+}
+
+/** 시작 시 전체 키·구독 로그인 확인, 이후 10분마다 쉬는 시간이 끝난 키만 다시 확인. */
+export async function startApiKeyMonitor(): Promise<void> {
+  if (monitorTimer || apiKeys.length === 0) return;
+  await Promise.all([checkSubscriptionLogin(), ...apiKeys.map((k) => probeAndRest(k))]);
+  const usable = readyKeys().length;
+  console.log(`[auth] Key check: ${usable}/${apiKeys.length} key(s) usable — now using ${credentialLabel(pickCredential())}`);
+  monitorTimer = setInterval(async () => {
+    const now = Date.now();
+    const due = apiKeys.filter((k) => (keyRestUntil.get(k) ?? Infinity) <= now);
+    if (due.length === 0 && readyKeys().length > 0) return;
+    const before = credentialLabel(pickCredential());
+    await Promise.all([checkSubscriptionLogin(), ...due.map((k) => probeAndRest(k))]);
+    const after = credentialLabel(pickCredential());
+    if (after !== before) console.log(`[auth] Credential switched: ${before} → ${after}`);
+  }, MONITOR_INTERVAL_MS);
+}
+
+export function stopApiKeyMonitor(): void {
+  if (monitorTimer) {
+    clearInterval(monitorTimer);
+    monitorTimer = null;
+  }
 }
 
 /** 이 오류가 키 자체 문제(한도·크레딧·인증)인가. 요청 내용 오류나 서버 과부하는 아니다. */
@@ -80,13 +196,14 @@ export function isApiKeyProblemText(text: string): boolean {
   return /Invalid API key|credit balance|billing|usage limit|spend limit|quota|regain access|rate limit|API Error: (401|402|403|429)/i.test(text);
 }
 
-/** 키를 쉬게 한다. 다른 키로 넘어갈 수 있으면 true. */
+/** 키를 쉬게 한다. 다른 키나 구독 로그인으로 넘어갈 수 있으면 true. */
 export function markApiKeyResting(key: string, status?: number, detail = ""): boolean {
   const ms = status === 429 || /rate limit/i.test(detail) ? RATE_LIMIT_REST_MS : KEY_REST_MS;
   keyRestUntil.set(key, Date.now() + ms);
-  const next = pickApiKey();
-  console.warn(`[auth] API key …${key.slice(-6)} ${status ?? ""} (${detail.slice(0, 120)}) — resting ${Math.round(ms / 60_000)}m${next && next !== key ? `, switching to …${next.slice(-6)}` : ", no other key"}`);
-  return next !== null && next !== key;
+  const next = pickCredential();
+  const canSwitch = next !== null && !(next.kind === "apiKey" && next.key === key);
+  console.warn(`[auth] API key …${key.slice(-6)} ${status ?? ""} (${detail.slice(0, 120)}) — resting ${Math.round(ms / 60_000)}m${canSwitch ? `, switching to ${credentialLabel(next)}` : ", nothing else to use"}`);
+  return canSwitch;
 }
 
 export function markApiKeyOk(key: string): void {

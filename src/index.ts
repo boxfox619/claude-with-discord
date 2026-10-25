@@ -8,7 +8,7 @@ import {
 } from "./errorNotifier.js";
 import { VisualizationServer } from "./web/server.js";
 import { closeMessageStore } from "./db/messageStore.js";
-import { loadApiKeys, startTokenAutoRefresh, stopTokenAutoRefresh, startBotTokenManager, stopBotTokenManager } from "./services/claudeAuth.js";
+import { loadApiKeys, startTokenAutoRefresh, stopTokenAutoRefresh, startBotTokenManager, stopBotTokenManager, startApiKeyMonitor, stopApiKeyMonitor } from "./services/claudeAuth.js";
 
 // Setup global error handlers early (before Discord client is ready)
 setupGlobalErrorHandlers();
@@ -51,7 +51,8 @@ let visualizationServer: VisualizationServer | null = null;
 const apiKeys = loadApiKeys();
 if (apiKeys.length > 0) {
   delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  console.log(`[auth] ANTHROPIC_API_KEY mode (${apiKeys.length} key(s), falls back in order) — OAuth token management disabled.`);
+  console.log(`[auth] ANTHROPIC_API_KEY mode (${apiKeys.length} key(s), falls back in order, then this machine's Claude Code subscription login) — OAuth token management disabled.`);
+  startApiKeyMonitor().catch((err) => console.error("[auth] Key monitor failed to start:", err));
 } else if (startBotTokenManager()) {
   console.log("[auth] Bot-isolated token auth active (shared credential file untouched).");
 } else {
@@ -103,6 +104,7 @@ async function shutdown() {
 
   stopTokenAutoRefresh();
   stopBotTokenManager();
+  stopApiKeyMonitor();
   destroyConfigManager();
   closeMessageStore();
   client.destroy();
