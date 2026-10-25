@@ -65,6 +65,7 @@ export type Credential = { kind: "apiKey"; key: string } | { kind: "subscription
 const PROBE_MODEL = "claude-haiku-4-5";
 const MONITOR_INTERVAL_MS = 10 * 60_000;
 let subscriptionReady = false;
+let subscriptionChecked = false;
 let monitorTimer: ReturnType<typeof setInterval> | null = null;
 
 function readyKeys(): string[] {
@@ -83,13 +84,20 @@ export function pickCredential(): Credential | null {
 export function apiKeyEnv(key: string): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env, ANTHROPIC_API_KEY: key };
   delete env.CLAUDE_CODE_OAUTH_TOKEN;
+  delete env.CLAUDE_SUBSCRIPTION_TOKEN;
   return env;
 }
 
-/** 구독 로그인으로 실행할 env — 키·토큰·프록시 주소를 빼서 CLI 가 자기 로그인을 쓰게 한다. */
+/**
+ * 구독 로그인으로 실행할 env — 키·토큰·프록시 주소를 빼서 CLI 가 자기 로그인을 쓰게 한다.
+ * .env 에 CLAUDE_SUBSCRIPTION_TOKEN(`claude setup-token` 으로 받은 장수명 구독 토큰)이 있으면 그걸 쓴다.
+ * pm2 데몬이 GUI 세션 밖(SSH 등)에서 떠 있으면 키체인에 든 로그인을 못 읽어서, 그런 기기는 이 토큰이 필요하다.
+ */
 function subscriptionEnv(): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
-  for (const k of ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEYS", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"]) delete env[k];
+  for (const k of ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEYS", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_SUBSCRIPTION_TOKEN"]) delete env[k];
+  const token = process.env.CLAUDE_SUBSCRIPTION_TOKEN?.trim();
+  if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token;
   return env;
 }
 
@@ -136,12 +144,14 @@ export async function checkSubscriptionLogin(): Promise<boolean> {
   let ok = false;
   try {
     const s = JSON.parse(out);
-    ok = s.loggedIn === true && s.authMethod === "claude.ai";
-    if (ok !== subscriptionReady) console.log(`[auth] Subscription login ${ok ? `available (${s.email ?? "?"}, ${s.subscriptionType ?? "?"})` : "NOT available"}`);
+    const usingToken = !!process.env.CLAUDE_SUBSCRIPTION_TOKEN?.trim();
+    ok = s.loggedIn === true && (usingToken ? s.authMethod === "oauth_token" : s.authMethod === "claude.ai");
+    if (ok !== subscriptionReady || !subscriptionChecked) console.log(`[auth] Subscription login ${ok ? `available (${usingToken ? "CLAUDE_SUBSCRIPTION_TOKEN" : `${s.email ?? "?"}, ${s.subscriptionType ?? "?"}`})` : `NOT available (authMethod=${s.authMethod}${usingToken ? "" : " — set CLAUDE_SUBSCRIPTION_TOKEN from \`claude setup-token\` if the CLI login lives in a keychain this process can't read"})`}`);
   } catch {
     if (subscriptionReady) console.warn("[auth] Subscription login check failed — treating as unavailable");
   }
   subscriptionReady = ok;
+  subscriptionChecked = true;
   return ok;
 }
 
