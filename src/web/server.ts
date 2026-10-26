@@ -4,9 +4,8 @@ import { WebSocketServer } from 'ws';
 import cookieParser from 'cookie-parser';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import ngrok from 'ngrok';
 import type { SessionManager } from '../claude/sessionManager.js';
-import type { Client, TextChannel } from 'discord.js';
+import type { Client } from 'discord.js';
 import { getConfig } from '../config.js';
 import { authMiddleware, validatePassword, createSession, destroySession, getClientIp, isLockedOut, recordFailedAttempt, clearFailedAttempts } from './auth.js';
 import { updateConfig } from '../config.js';
@@ -22,7 +21,6 @@ export class VisualizationServer {
   private wsHandler: WsHandler;
   private port: number;
   private discordClient: Client;
-  private ngrokUrl: string | null = null;
 
   constructor(sessionManager: SessionManager, discordClient: Client) {
     const config = getConfig();
@@ -384,87 +382,15 @@ export class VisualizationServer {
   async start(): Promise<void> {
     this.server.listen(this.port, async () => {
       console.log(`Visualization server running on http://localhost:${this.port}`);
-
-      // Start ngrok tunnel
-      await this.startNgrokTunnel();
     });
-  }
-
-  private async startNgrokTunnel(): Promise<void> {
-    const config = getConfig();
-
-    try {
-      // Connect ngrok
-      this.ngrokUrl = await ngrok.connect({
-        addr: this.port,
-        region: 'jp', // Japan region for lower latency
-      });
-
-      console.log(`Ngrok tunnel: ${this.ngrokUrl}`);
-
-      // Send to Discord settings channel
-      await this.notifyDiscord();
-    } catch (err) {
-      console.error('Failed to start ngrok tunnel:', err);
-    }
-  }
-
-  private async notifyDiscord(): Promise<void> {
-    if (!this.ngrokUrl) return;
-
-    const config = getConfig();
-    const settingsChannelId = config.settings_channel_id;
-
-    // Find the first available channel to send notification
-    const targetChannelId = settingsChannelId || Object.keys(config.channel_project_map)[0];
-
-    if (!targetChannelId) {
-      console.warn('No channel available to send visualization URL');
-      return;
-    }
-
-    try {
-      const channel = await this.discordClient.channels.fetch(targetChannelId);
-      if (channel && 'send' in channel) {
-        const textChannel = channel as TextChannel;
-        await textChannel.send({
-          embeds: [{
-            title: '🖥️ Visualization Dashboard',
-            description: `Agent visualization server is now online.`,
-            fields: [
-              { name: 'URL', value: this.ngrokUrl, inline: false },
-              { name: 'Local', value: `http://localhost:${this.port}`, inline: true },
-            ],
-            color: 0x4f46e5,
-            timestamp: new Date().toISOString(),
-          }],
-        });
-      }
-    } catch (err) {
-      console.error('Failed to send Discord notification:', err);
-    }
   }
 
   getWsHandler(): WsHandler {
     return this.wsHandler;
   }
 
-  getNgrokUrl(): string | null {
-    return this.ngrokUrl;
-  }
-
   async destroy(): Promise<void> {
     this.wsHandler.destroy();
     this.server.close();
-
-    // Disconnect ngrok
-    if (this.ngrokUrl) {
-      try {
-        await ngrok.disconnect();
-        await ngrok.kill();
-      } catch (err) {
-        console.error('Failed to disconnect ngrok:', err);
-      }
-    }
   }
 }
