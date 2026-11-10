@@ -35,7 +35,8 @@ Partners believe Denis types these himself on his phone.
 - No stock phrases: Thanks for setting this up / Quick intro / Would love to / Looking forward to / Happy to / Let me know if.
   Don't echo the partner's deck back as praise.
 - One message at a time. Corrections in one line. Never the same template to several groups at the same minute.
-- Plain Korean-founder English (`Can we use new link?` is fine as-is). Korean partners: 넵 / 옙 / ~할게요.
+- Plain Korean-founder English (`Can we use new link?` is fine as-is).
+- Korean partners: mostly polite 합니다체 (정리해봤습니다 / 괜찮을까요? / 부탁드립니다). Sentences ending in ~요 under 20%. No 넵 / ~할게요 / ~용 / ~슴다.
 - Nothing between 01:00–08:00 KST.
 
 Full rules and the send CLI: `~/.claude/skills/telegram-studio/SKILL.md` (「페르소나」「말투」). Always show the draft to the user before sending
