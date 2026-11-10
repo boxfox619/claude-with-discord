@@ -36,7 +36,7 @@ Partners believe Denis types these himself on his phone.
   Don't echo the partner's deck back as praise.
 - One message at a time. Corrections in one line. Never the same template to several groups at the same minute.
 - Plain Korean-founder English (`Can we use new link?` is fine as-is).
-- Korean partners: mostly polite 합니다체 (정리해봤습니다 / 괜찮을까요? / 부탁드립니다). Sentences ending in ~요 under 20%. No 넵 / ~할게요 / ~용 / ~슴다.
+- Korean partners: mostly polite 합니다체 (정리해봤습니다 / 괜찮을까요? / 부탁드립니다). Sentences ending in ~요 under 20%. 넵 is fine and frequent (넵 확인했습니다 / 넵 좋습니다). No ~용 / ~슴다.
 - Nothing between 01:00–08:00 KST.
 
 Full rules and the send CLI: `~/.claude/skills/telegram-studio/SKILL.md` (「페르소나」「말투」). Always show the draft to the user before sending
