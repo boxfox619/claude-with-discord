@@ -1,25 +1,33 @@
 import { ActionRowBuilder, StringSelectMenuBuilder } from "discord.js";
 
-export type ModelChoice = "opus" | "sonnet" | "haiku";
+export type ModelChoice = "opus" | "fable" | "sonnet" | "haiku";
 
+// modelId 는 Claude Code CLI 별칭이다. CLI 가 최신 버전으로 풀어 주므로
+// 새 모델이 나와도 여기를 고칠 필요가 없다 (목록은 query.supportedModels() 와 맞출 것).
 export const MODEL_OPTIONS: { value: ModelChoice; label: string; description: string; modelId: string }[] = [
   {
     value: "opus",
     label: "Claude Opus",
-    description: "Most capable, highest quality",
-    modelId: "claude-opus-4-6",
+    description: "For complex work and everyday tasks",
+    modelId: "opus",
+  },
+  {
+    value: "fable",
+    label: "Claude Fable",
+    description: "For your toughest challenges",
+    modelId: "fable",
   },
   {
     value: "sonnet",
     label: "Claude Sonnet",
-    description: "Balanced performance and speed",
-    modelId: "claude-sonnet-4-6",
+    description: "Most efficient for simpler tasks",
+    modelId: "sonnet",
   },
   {
     value: "haiku",
     label: "Claude Haiku",
-    description: "Fastest, most cost-effective",
-    modelId: "claude-haiku-4-5-20251001",
+    description: "Fastest for quick answers",
+    modelId: "haiku",
   },
 ];
 
