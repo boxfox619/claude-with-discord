@@ -117,6 +117,7 @@ export interface BaseSessionInfo {
   isProcessing: boolean;
   mode: SessionMode;
   model?: string;
+  effort?: string; // low | medium | high | xhigh | max (undefined = default)
   pendingPermission?: PendingPermission;
   pendingImages?: PendingImage[];
   messageQueue: QueuedMessage[];

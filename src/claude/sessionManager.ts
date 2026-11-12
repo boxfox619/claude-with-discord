@@ -40,6 +40,7 @@ export type MessageCallback = (threadId: string, role: 'user' | 'assistant' | 's
 export class SessionManager {
   private sessions = new Map<string, SessionInfo>();
   private pendingModels = new Map<string, string>(); // threadId -> modelId (before session creation)
+  private pendingEfforts = new Map<string, string>(); // threadId -> effort (before session creation)
   private cleanupInterval: ReturnType<typeof setInterval>;
   private client: Client | null = null;
   private pendingLoginSession: LoginSession | null = null;
@@ -201,6 +202,24 @@ export class SessionManager {
     }
     await thread.send({
       content: `*Model changed to **${modelLabel}**.*`,
+    });
+  }
+
+  /**
+   * Set the effort level for a session. Applied from the next query (effort is a per-query option).
+   * `undefined` means "default" (do not pass effort).
+   */
+  async setEffort(threadId: string, effort: string | undefined, effortLabel: string, thread: ThreadChannel): Promise<void> {
+    const session = this.sessions.get(threadId);
+    if (session) {
+      session.effort = effort;
+    } else if (effort) {
+      this.pendingEfforts.set(threadId, effort);
+    } else {
+      this.pendingEfforts.delete(threadId);
+    }
+    await thread.send({
+      content: `*Effort changed to **${effortLabel}**. 다음 메시지부터 적용됩니다.*`,
     });
   }
 
@@ -620,6 +639,10 @@ export class SessionManager {
           ...(process.env.CLAUDE_CODE_PATH ? { pathToClaudeCodeExecutable: process.env.CLAUDE_CODE_PATH } : {}),
           ...(session?.sessionId ? { resume: session.sessionId } : {}),
           ...(session?.model || this.pendingModels.get(threadId) ? { model: session?.model ?? this.pendingModels.get(threadId) } : {}),
+          // CLI 는 xhigh 를 지원하지만 SDK 타입(EffortLevel)에는 아직 없어 캐스팅한다.
+          ...(session?.effort || this.pendingEfforts.get(threadId)
+            ? { effort: (session?.effort ?? this.pendingEfforts.get(threadId)) as "high" }
+            : {}),
         },
       });
 
@@ -658,6 +681,10 @@ export class SessionManager {
               if (pendingModel) {
                 this.pendingModels.delete(threadId);
               }
+              const pendingEffort = this.pendingEfforts.get(threadId);
+              if (pendingEffort) {
+                this.pendingEfforts.delete(threadId);
+              }
 
               const sessionInfo: MainSessionInfo = {
                 sessionId: message.session_id,
@@ -671,6 +698,7 @@ export class SessionManager {
                 isProcessing: true,
                 mode: "action",
                 model: pendingModel,
+                effort: pendingEffort,
                 pendingImages: pendingImages.length > 0 ? pendingImages : undefined,
                 messageQueue: [],
                 // Main session specific fields

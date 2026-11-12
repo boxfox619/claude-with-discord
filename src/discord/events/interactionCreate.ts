@@ -13,6 +13,7 @@ import type { SessionManager } from "../../claude/sessionManager.js";
 import { createSessionButtons } from "../components/closeAllSessionsButton.js";
 import { createModeSelect } from "../components/modeButtons.js";
 import { type ModelChoice, getModelId, getModelLabel } from "../components/modelSelect.js";
+import { createEffortSelect, getEffortLabel, isEffortChoice } from "../components/effortSelect.js";
 import { handleSettingsButton, handleAddProjectModal } from "../components/settingsButtons.js";
 
 export function handleInteractionCreate(_config: AppConfig, sessionManager: SessionManager) {
@@ -89,6 +90,20 @@ export function handleInteractionCreate(_config: AppConfig, sessionManager: Sess
         const modelName = getModelLabel(modelChoice);
         await interaction.deferUpdate();
         await sessionManager.setModel(channel.id, modelId, modelName, channel);
+        return;
+      }
+
+      // Handle effort select
+      if (customId === "effort_select") {
+        const channel = interaction.channel;
+        if (!channel || (channel.type !== ChannelType.PublicThread && channel.type !== ChannelType.PrivateThread)) {
+          return;
+        }
+
+        const value = interaction.values[0];
+        if (!isEffortChoice(value)) return;
+        await interaction.deferUpdate();
+        await sessionManager.setEffort(channel.id, value === "default" ? undefined : value, getEffortLabel(value), channel);
         return;
       }
 
@@ -211,7 +226,7 @@ export function handleInteractionCreate(_config: AppConfig, sessionManager: Sess
       const { createModelSelect } = await import("../components/modelSelect.js");
       await thread.send({
         content: "*Session ready. Send a message to start.*",
-        components: [createModeSelect("action"), createModelSelect("opus")],
+        components: [createModeSelect("action"), createModelSelect("opus"), createEffortSelect("default")],
       });
 
       return;
